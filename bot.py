@@ -7,6 +7,8 @@ A simple bot that manages a shared task list for groups.
 import os
 import json
 import logging
+import stat
+import time
 from typing import Dict, List, Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -27,25 +29,186 @@ TASK_FILE = os.getenv('TASK_FILE', 'task_list.json')
 
 class TaskListBot:
     def __init__(self):
+        logger.info("🤖 Initializing TaskListBot...")
+        logger.info(f"📁 Task file location: {TASK_FILE}")
         self.tasks = self.load_tasks()
+        logger.info("🚀 TaskListBot initialization complete")
     
     def load_tasks(self) -> Dict[int, List[Dict]]:
         """Load tasks from file, organized by chat_id"""
+        logger.info(f"🔄 Attempting to load tasks from: {TASK_FILE}")
+        
+        # Check if file exists
+        if not os.path.exists(TASK_FILE):
+            logger.info(f"📄 Task file does not exist: {TASK_FILE}")
+            logger.info("📝 Creating new empty task list")
+            return {}
+        
+        # Get file information
         try:
-            if os.path.exists(TASK_FILE):
-                with open(TASK_FILE, 'r', encoding='utf-8') as f:
-                    return json.load(f)
+            file_stat = os.stat(TASK_FILE)
+            file_size = file_stat.st_size
+            file_mtime = time.ctime(file_stat.st_mtime)
+            file_permissions = stat.filemode(file_stat.st_mode)
+            
+            logger.info(f"📊 File info - Size: {file_size} bytes, Modified: {file_mtime}, Permissions: {file_permissions}")
+            
+            # Check if file is empty
+            if file_size == 0:
+                logger.warning(f"⚠️ Task file is empty: {TASK_FILE}")
+                return {}
+            
+        except OSError as e:
+            logger.error(f"❌ Error getting file info for {TASK_FILE}: {e}")
+            return {}
+        
+        # Try to read and parse the file
+        try:
+            with open(TASK_FILE, 'r', encoding='utf-8') as f:
+                content = f.read()
+                logger.info(f"📖 Successfully read {len(content)} characters from file")
+                
+                if not content.strip():
+                    logger.warning("⚠️ File contains only whitespace")
+                    return {}
+                
+                tasks = json.loads(content)
+                logger.info(f"✅ Successfully loaded {len(tasks)} chat(s) with tasks")
+                
+                # Log summary of loaded tasks
+                total_tasks = sum(len(chat_tasks) for chat_tasks in tasks.values())
+                logger.info(f"📋 Total tasks loaded: {total_tasks}")
+                
+                for chat_id, chat_tasks in tasks.items():
+                    logger.info(f"  💬 Chat {chat_id}: {len(chat_tasks)} tasks")
+                
+                return tasks
+                
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ JSON decode error in {TASK_FILE}: {e}")
+            logger.error(f"📄 File content preview: {content[:200]}...")
+            return {}
+        except UnicodeDecodeError as e:
+            logger.error(f"❌ Unicode decode error in {TASK_FILE}: {e}")
+            return {}
+        except PermissionError as e:
+            logger.error(f"❌ Permission denied reading {TASK_FILE}: {e}")
+            return {}
         except Exception as e:
-            logger.error(f"Error loading tasks: {e}")
-        return {}
+            logger.error(f"❌ Unexpected error loading tasks from {TASK_FILE}: {e}")
+            return {}
     
     def save_tasks(self):
         """Save tasks to file"""
+        logger.info(f"💾 Attempting to save tasks to: {TASK_FILE}")
+        
+        # Calculate task summary before saving
+        total_tasks = sum(len(chat_tasks) for chat_tasks in self.tasks.values())
+        logger.info(f"📊 Saving {len(self.tasks)} chat(s) with {total_tasks} total tasks")
+        
+        for chat_id, chat_tasks in self.tasks.items():
+            logger.info(f"  💬 Chat {chat_id}: {len(chat_tasks)} tasks")
+        
+        # Check if directory exists and create if needed
+        task_dir = os.path.dirname(os.path.abspath(TASK_FILE))
+        if task_dir and not os.path.exists(task_dir):
+            try:
+                os.makedirs(task_dir, exist_ok=True)
+                logger.info(f"📁 Created directory: {task_dir}")
+            except OSError as e:
+                logger.error(f"❌ Failed to create directory {task_dir}: {e}")
+                return
+        
+        # Check write permissions
+        if os.path.exists(TASK_FILE):
+            try:
+                if not os.access(TASK_FILE, os.W_OK):
+                    logger.error(f"❌ No write permission for {TASK_FILE}")
+                    return
+            except OSError as e:
+                logger.error(f"❌ Error checking write permissions for {TASK_FILE}: {e}")
+                return
+        
+        # Get file info before writing (if file exists)
+        old_size = 0
+        old_mtime = None
+        if os.path.exists(TASK_FILE):
+            try:
+                old_stat = os.stat(TASK_FILE)
+                old_size = old_stat.st_size
+                old_mtime = time.ctime(old_stat.st_mtime)
+                logger.info(f"📊 Current file - Size: {old_size} bytes, Modified: {old_mtime}")
+            except OSError as e:
+                logger.warning(f"⚠️ Could not get file info before saving: {e}")
+        
+        # Write the file
         try:
             with open(TASK_FILE, 'w', encoding='utf-8') as f:
                 json.dump(self.tasks, f, ensure_ascii=False, indent=2)
+            
+            # Get new file info after writing
+            try:
+                new_stat = os.stat(TASK_FILE)
+                new_size = new_stat.st_size
+                new_mtime = time.ctime(new_stat.st_mtime)
+                new_permissions = stat.filemode(new_stat.st_mode)
+                
+                logger.info(f"✅ Successfully saved tasks to {TASK_FILE}")
+                logger.info(f"📊 New file info - Size: {new_size} bytes, Modified: {new_mtime}, Permissions: {new_permissions}")
+                
+                if old_size > 0:
+                    size_diff = new_size - old_size
+                    logger.info(f"📈 Size change: {size_diff:+d} bytes ({old_size} → {new_size})")
+                
+                # Verify persistence after saving
+                if self.verify_persistence():
+                    logger.info("✅ Persistence verification passed")
+                else:
+                    logger.error("❌ Persistence verification failed - data may not be saved correctly")
+                
+            except OSError as e:
+                logger.warning(f"⚠️ Could not get file info after saving: {e}")
+                
+        except PermissionError as e:
+            logger.error(f"❌ Permission denied writing to {TASK_FILE}: {e}")
+        except OSError as e:
+            logger.error(f"❌ OS error writing to {TASK_FILE}: {e}")
+        except UnicodeEncodeError as e:
+            logger.error(f"❌ Unicode encode error writing to {TASK_FILE}: {e}")
         except Exception as e:
-            logger.error(f"Error saving tasks: {e}")
+            logger.error(f"❌ Unexpected error saving tasks to {TASK_FILE}: {e}")
+            logger.error(f"📄 Task data preview: {str(self.tasks)[:200]}...")
+    
+    def verify_persistence(self) -> bool:
+        """Verify that the task file exists and contains valid data"""
+        logger.info(f"🔍 Verifying persistence for: {TASK_FILE}")
+        
+        if not os.path.exists(TASK_FILE):
+            logger.warning(f"⚠️ Task file does not exist: {TASK_FILE}")
+            return False
+        
+        try:
+            with open(TASK_FILE, 'r', encoding='utf-8') as f:
+                content = f.read()
+                if not content.strip():
+                    logger.warning("⚠️ Task file is empty")
+                    return False
+                
+                # Try to parse the JSON
+                file_tasks = json.loads(content)
+                logger.info(f"✅ Persistence verification successful - file contains {len(file_tasks)} chat(s)")
+                
+                # Compare with in-memory data
+                if file_tasks == self.tasks:
+                    logger.info("✅ File content matches in-memory data")
+                    return True
+                else:
+                    logger.warning("⚠️ File content differs from in-memory data")
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"❌ Persistence verification failed: {e}")
+            return False
     
     def get_chat_tasks(self, chat_id: int) -> List[Dict]:
         """Get tasks for a specific chat"""
@@ -53,6 +216,8 @@ class TaskListBot:
     
     def add_task(self, chat_id: int, task_text: str) -> int:
         """Add a new task to the list"""
+        logger.info(f"➕ Adding new task to chat {chat_id}: '{task_text[:50]}{'...' if len(task_text) > 50 else ''}'")
+        
         chat_tasks = self.get_chat_tasks(chat_id)
         task_id = len(chat_tasks) + 1
         new_task = {
@@ -62,21 +227,37 @@ class TaskListBot:
         }
         chat_tasks.append(new_task)
         self.tasks[str(chat_id)] = chat_tasks
+        
+        logger.info(f"💾 Triggering save after adding task #{task_id} to chat {chat_id}")
         self.save_tasks()
+        
+        logger.info(f"✅ Task #{task_id} successfully added and saved")
         return task_id
     
     def remove_task(self, chat_id: int, task_id: int) -> bool:
         """Remove a task by ID"""
+        logger.info(f"🗑️ Attempting to remove task #{task_id} from chat {chat_id}")
+        
         chat_tasks = self.get_chat_tasks(chat_id)
         for i, task in enumerate(chat_tasks):
             if task["id"] == task_id:
+                task_text = task["text"]
+                logger.info(f"📝 Found task to remove: '{task_text[:50]}{'...' if len(task_text) > 50 else ''}'")
+                
                 del chat_tasks[i]
                 # Renumber remaining tasks
                 for j, remaining_task in enumerate(chat_tasks):
                     remaining_task["id"] = j + 1
+                
                 self.tasks[str(chat_id)] = chat_tasks
+                
+                logger.info(f"💾 Triggering save after removing task #{task_id} from chat {chat_id}")
                 self.save_tasks()
+                
+                logger.info(f"✅ Task #{task_id} successfully removed and saved")
                 return True
+        
+        logger.warning(f"⚠️ Task #{task_id} not found in chat {chat_id}")
         return False
     
     def format_task_list(self, chat_id: int) -> str:
@@ -116,31 +297,50 @@ class TaskListBot:
         return "\n".join(task_lines)
     
     def format_task_list_with_buttons(self, chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
-        """Format the task list with inline keyboard buttons for removal"""
+        """Format the task list as buttons only - no text, just clickable task buttons"""
         chat_tasks = self.get_chat_tasks(chat_id)
         if not chat_tasks:
             return "📝 No tasks in the list yet!\n\nUse /add <task> to add a new task.", None
         
-        task_lines = ["📋 *Current Task List:*\n"]
         keyboard_buttons = []
         
         for task in chat_tasks:
-            # Escape Markdown special characters in task text
-            escaped_text = self.escape_markdown(task['text'])
-            task_lines.append(f"{task['id']}. {escaped_text}")
+            # Truncate task text if too long for button
+            task_text = task['text']
+            if len(task_text) > 50:
+                task_text = task_text[:47] + "..."
             
-            # Create a button for each task
+            # Create a button for each task - the button text IS the task
             keyboard_buttons.append([
                 InlineKeyboardButton(
-                    f"🗑️ Remove #{task['id']}", 
+                    f"{task['id']}. {task_text}", 
                     callback_data=f"remove_{chat_id}_{task['id']}"
                 )
             ])
         
-        task_lines.append(f"\n💡 Click the buttons below to remove tasks")
-        
         keyboard = InlineKeyboardMarkup(keyboard_buttons) if keyboard_buttons else None
-        return "\n".join(task_lines), keyboard
+        return "📋 **Click any task to remove it:**", keyboard
+
+async def show_text_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /text command - show full task list without truncation"""
+    if not update.message:
+        logger.warning("Received /text command without message")
+        return
+    
+    try:
+        chat_id = update.effective_chat.id
+        task_list = task_bot.format_task_list(chat_id)
+        await update.message.reply_text(task_list, parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"Error sending text task list: {e}")
+        # Fallback: send without Markdown formatting
+        try:
+            chat_id = update.effective_chat.id
+            task_list = task_bot.format_task_list_plain(chat_id)
+            await update.message.reply_text(task_list)
+        except Exception as e2:
+            logger.error(f"Error sending plain text task list: {e2}")
+            await update.message.reply_text("❌ Error displaying task list. Please try again.")
 
 # Global bot instance
 task_bot = TaskListBot()
@@ -156,10 +356,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🤖 **Task List Bot**\n\n"
             "This bot helps manage a shared task list in groups!\n\n"
             "**Commands:**\n"
-            "/list - Show current tasks\n"
+            "/list - Show current tasks (as buttons)\n"
+            "/text - Show current tasks (as text list)\n"
             "/add <task> - Add a new task\n"
-            "/remove <number> - Remove a task by number\n"
-            "/clear - Clear all tasks\n\n"
+            "/remove <number> - Remove a task by number\n\n"
             "Add me to a group to start managing tasks together!"
         )
     else:
@@ -274,22 +474,6 @@ async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Use /list to see available tasks."
         )
 
-async def clear_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /clear command"""
-    if not update.message:
-        logger.warning("Received /clear command without message")
-        return
-    
-    chat_id = update.effective_chat.id
-    task_bot.tasks[str(chat_id)] = []
-    task_bot.save_tasks()
-    
-    # Show updated (empty) task list
-    task_list, keyboard = task_bot.format_task_list_with_buttons(chat_id)
-    await update.message.reply_text(
-        f"🗑️ All tasks cleared!\n\n{task_list}",
-        parse_mode='Markdown'
-    )
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle regular text messages"""
@@ -383,9 +567,9 @@ def main():
     # Add command handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("list", show_list))
+    application.add_handler(CommandHandler("text", show_text_list))
     application.add_handler(CommandHandler("add", add_task))
     application.add_handler(CommandHandler("remove", remove_task))
-    application.add_handler(CommandHandler("clear", clear_tasks))
     
     # Add message handler for text messages
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
