@@ -85,7 +85,30 @@ class TaskListBot:
         if not chat_tasks:
             return "📝 No tasks in the list yet!\n\nUse /add <task> to add a new task."
         
-        task_lines = ["📋 **Current Task List:**\n"]
+        task_lines = ["📋 *Current Task List:*\n"]
+        for task in chat_tasks:
+            # Escape Markdown special characters in task text
+            escaped_text = self.escape_markdown(task['text'])
+            task_lines.append(f"{task['id']}. {escaped_text}")
+        
+        task_lines.append(f"\n💡 Use /remove <number> to remove a task")
+        return "\n".join(task_lines)
+    
+    def escape_markdown(self, text: str) -> str:
+        """Escape Markdown special characters"""
+        # Characters that need escaping in Markdown
+        escape_chars = ['*', '_', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+        for char in escape_chars:
+            text = text.replace(char, f'\\{char}')
+        return text
+    
+    def format_task_list_plain(self, chat_id: int) -> str:
+        """Format the task list for display without Markdown"""
+        chat_tasks = self.get_chat_tasks(chat_id)
+        if not chat_tasks:
+            return "📝 No tasks in the list yet!\n\nUse /add <task> to add a new task."
+        
+        task_lines = ["📋 Current Task List:\n"]
         for task in chat_tasks:
             task_lines.append(f"{task['id']}. {task['text']}")
         
@@ -116,9 +139,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /list command"""
-    chat_id = update.effective_chat.id
-    task_list = task_bot.format_task_list(chat_id)
-    await update.message.reply_text(task_list, parse_mode='Markdown')
+    try:
+        chat_id = update.effective_chat.id
+        task_list = task_bot.format_task_list(chat_id)
+        await update.message.reply_text(task_list, parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"Error sending task list: {e}")
+        # Fallback: send without Markdown formatting
+        try:
+            chat_id = update.effective_chat.id
+            task_list = task_bot.format_task_list_plain(chat_id)
+            await update.message.reply_text(task_list)
+        except Exception as e2:
+            logger.error(f"Error sending plain task list: {e2}")
+            await update.message.reply_text("❌ Error displaying task list. Please try again.")
 
 async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /add command"""
@@ -129,14 +163,21 @@ async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
-    chat_id = update.effective_chat.id
-    task_text = " ".join(context.args)
-    task_id = task_bot.add_task(chat_id, task_text)
-    
-    await update.message.reply_text(
-        f"✅ Added task #{task_id}: {task_text}\n\n"
-        f"Use /list to see all tasks or /remove {task_id} to remove this one."
-    )
+    try:
+        chat_id = update.effective_chat.id
+        task_text = " ".join(context.args)
+        task_id = task_bot.add_task(chat_id, task_text)
+        
+        # Escape the task text for display
+        escaped_text = task_bot.escape_markdown(task_text)
+        await update.message.reply_text(
+            f"✅ Added task #{task_id}: {escaped_text}\n\n"
+            f"Use /list to see all tasks or /remove {task_id} to remove this one.",
+            parse_mode='Markdown'
+        )
+    except Exception as e:
+        logger.error(f"Error adding task: {e}")
+        await update.message.reply_text("❌ Error adding task. Please try again.")
 
 async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /remove command"""
