@@ -321,6 +321,16 @@ class TaskListBot:
         keyboard = InlineKeyboardMarkup(keyboard_buttons) if keyboard_buttons else None
         return "📋 **Click any task to remove it:**", keyboard
 
+async def delete_user_message(update: Update):
+    """Helper function to delete user's message (for cleanup)"""
+    if update.message:
+        try:
+            await update.message.delete()
+            logger.info("✅ Successfully deleted user message")
+        except Exception as e:
+            logger.info(f"ℹ️ Could not delete user message (likely no admin permissions): {e}")
+            # Don't re-raise the exception - just log and continue
+
 async def show_text_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /text command - show full task list without truncation"""
     if not update.message:
@@ -341,6 +351,9 @@ async def show_text_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e2:
             logger.error(f"Error sending plain text task list: {e2}")
             await update.message.reply_text("❌ Error displaying task list. Please try again.")
+    
+    # Clean up user's command message (always attempt, regardless of success/failure above)
+    await delete_user_message(update)
 
 # Global bot instance
 task_bot = TaskListBot()
@@ -392,6 +405,9 @@ async def show_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e2:
             logger.error(f"Error sending plain task list: {e2}")
             await update.message.reply_text("❌ Error displaying task list. Please try again.")
+    
+    # Clean up user's command message (always attempt, regardless of success/failure above)
+    await delete_user_message(update)
 
 async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /add command"""
@@ -404,6 +420,8 @@ async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "❌ Please provide a task to add!\n"
             "Example: /add Buy groceries"
         )
+        # Clean up user's command message
+        await delete_user_message(update)
         return
     
     try:
@@ -430,6 +448,9 @@ async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error adding task: {e}")
         await update.message.reply_text("❌ Error adding task. Please try again.")
+    
+    # Clean up user's command message (always attempt, regardless of success/failure above)
+    await delete_user_message(update)
 
 async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /remove command"""
@@ -442,6 +463,8 @@ async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "❌ Please provide a task number to remove!\n"
             "Example: /remove 1"
         )
+        # Clean up user's command message
+        await delete_user_message(update)
         return
     
     try:
@@ -451,6 +474,8 @@ async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "❌ Please provide a valid task number!\n"
             "Example: /remove 1"
         )
+        # Clean up user's command message
+        await delete_user_message(update)
         return
     
     chat_id = update.effective_chat.id
@@ -473,6 +498,9 @@ async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"❌ Task #{task_id} not found!\n"
             "Use /list to see available tasks."
         )
+    
+    # Clean up user's command message (always attempt, regardless of success/failure above)
+    await delete_user_message(update)
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -507,6 +535,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text(
                     f"✅ Added task #{task_id}: {task_text}"
                 )
+            # Clean up user's message
+            await delete_user_message(update)
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle callback queries from inline keyboard buttons"""
