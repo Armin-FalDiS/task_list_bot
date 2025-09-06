@@ -274,8 +274,7 @@ class TaskListBot:
         task_id = len(chat_tasks) + 1
         new_task = {
             "id": task_id,
-            "text": sanitized_text,
-            "added_by": "user"  # We could track user info here if needed
+            "text": sanitized_text
         }
         chat_tasks.append(new_task)
         self.tasks[str(chat_id)] = chat_tasks
@@ -286,14 +285,15 @@ class TaskListBot:
         logger.info(f"✅ Task #{task_id} successfully added and saved")
         return task_id
     
-    def remove_task(self, chat_id: int, task_id: int) -> bool:
-        """Remove a task by ID"""
+    def remove_task(self, chat_id: int, task_id: int) -> tuple[bool, str]:
+        """Remove a task by ID and return (success, task_description)"""
         logger.info(f"🗑️ Attempting to remove task #{task_id} from chat {chat_id}")
         
         chat_tasks = self.get_chat_tasks(chat_id)
         for i, task in enumerate(chat_tasks):
             if task["id"] == task_id:
-                logger.info(f"📝 Found task #{task_id} to remove")
+                task_description = task["text"]
+                logger.info(f"📝 Found task #{task_id} to remove: '{task_description}'")
                 
                 del chat_tasks[i]
                 # Renumber remaining tasks
@@ -306,10 +306,10 @@ class TaskListBot:
                 self.save_tasks()
                 
                 logger.info(f"✅ Task #{task_id} successfully removed and saved")
-                return True
+                return True, task_description
         
         logger.warning(f"⚠️ Task #{task_id} not found in chat {chat_id}")
-        return False
+        return False, ""
     
     def format_task_list(self, chat_id: int) -> str:
         """Format the task list for display"""
@@ -323,7 +323,7 @@ class TaskListBot:
             escaped_text = self.escape_markdown(task['text'])
             task_lines.append(f"{task['id']}. {escaped_text}")
         
-        task_lines.append(f"\n💡 Use /remove <number> to remove a task")
+        task_lines.append(f"\n💡 Click on any task button to remove it")
         return "\n".join(task_lines)
     
     def escape_markdown(self, text: str) -> str:
@@ -344,7 +344,7 @@ class TaskListBot:
         for task in chat_tasks:
             task_lines.append(f"{task['id']}. {task['text']}")
         
-        task_lines.append(f"\n💡 Use /remove <number> to remove a task")
+        task_lines.append(f"\n💡 Click on any task button to remove it")
         return "\n".join(task_lines)
     
     def format_task_list_with_buttons(self, chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -420,10 +420,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🤖 **Task List Bot**\n\n"
             "This bot helps manage a shared task list in groups!\n\n"
             "**Commands:**\n"
-            "/list - Show current tasks (as buttons)\n"
+            "/list - Show current tasks (as clickable buttons)\n"
             "/text - Show current tasks (as text list)\n"
-            "/add <task> - Add a new task\n"
-            "/remove <number> - Remove a task by number\n\n"
+            "/add <task> - Add a new task\n\n"
+            "💡 **Tip:** Click on any task button to remove it!\n\n"
             "Add me to a group to start managing tasks together!"
         )
     else:
@@ -506,55 +506,6 @@ async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Clean up user's command message (always attempt, regardless of success/failure above)
     await delete_user_message(update)
 
-async def remove_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /remove command"""
-    if not update.message:
-        logger.warning("Received /remove command without message")
-        return
-    
-    if not context.args:
-        await update.message.reply_text(
-            "❌ Please provide a task number to remove!\n"
-            "Example: /remove 1"
-        )
-        # Clean up user's command message
-        await delete_user_message(update)
-        return
-    
-    try:
-        task_id = int(context.args[0])
-    except ValueError:
-        await update.message.reply_text(
-            "❌ Please provide a valid task number!\n"
-            "Example: /remove 1"
-        )
-        # Clean up user's command message
-        await delete_user_message(update)
-        return
-    
-    chat_id = update.effective_chat.id
-    if task_bot.remove_task(chat_id, task_id):
-        # Show updated task list with buttons
-        task_list, keyboard = task_bot.format_task_list_with_buttons(chat_id)
-        if keyboard:
-            await update.message.reply_text(
-                f"✅ Removed task #{task_id}!\n\n{task_list}",
-                parse_mode='Markdown',
-                reply_markup=keyboard
-            )
-        else:
-            await update.message.reply_text(
-                f"✅ Removed task #{task_id}!\n\n"
-                "📝 No tasks remaining in the list."
-            )
-    else:
-        await update.message.reply_text(
-            f"❌ Task #{task_id} not found!\n"
-            "Use /list to see available tasks."
-        )
-    
-    # Clean up user's command message (always attempt, regardless of success/failure above)
-    await delete_user_message(update)
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -625,18 +576,19 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 
                 # Verify the callback is from the same chat
                 if query.message.chat.id == chat_id:
-                    if task_bot.remove_task(chat_id, task_id):
+                    success, task_description = task_bot.remove_task(chat_id, task_id)
+                    if success:
                         # Show updated task list with buttons
                         task_list, keyboard = task_bot.format_task_list_with_buttons(chat_id)
                         if keyboard:
                             await query.edit_message_text(
-                                f"✅ Removed task #{task_id}!\n\n{task_list}",
+                                f"✅ Removed task #{task_id}: {task_bot.escape_markdown(task_description)}\n\n{task_list}",
                                 parse_mode='Markdown',
                                 reply_markup=keyboard
                             )
                         else:
                             await query.edit_message_text(
-                                f"✅ Removed task #{task_id}!\n\n"
+                                f"✅ Removed task #{task_id}: {task_description}\n\n"
                                 "📝 No tasks remaining in the list."
                             )
                     else:
@@ -672,7 +624,6 @@ def main():
     application.add_handler(CommandHandler("list", show_list))
     application.add_handler(CommandHandler("text", show_text_list))
     application.add_handler(CommandHandler("add", add_task))
-    application.add_handler(CommandHandler("remove", remove_task))
     
     # Add message handler for text messages
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
