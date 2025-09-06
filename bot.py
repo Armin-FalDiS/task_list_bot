@@ -30,10 +30,14 @@ logger = logging.getLogger(__name__)
 # File to store the task list (can be overridden by environment variable)
 TASK_FILE = os.getenv('TASK_FILE', 'task_list.json')
 
+# Maximum number of tasks per chat (can be overridden by environment variable)
+MAX_TASKS_PER_CHAT = int(os.getenv('MAX_TASKS_PER_CHAT', '42'))
+
 class TaskListBot:
     def __init__(self):
         logger.info("🤖 Initializing TaskListBot...")
         logger.info(f"📁 Task file location: {TASK_FILE}")
+        logger.info(f"📊 Maximum tasks per chat: {MAX_TASKS_PER_CHAT}")
         self.tasks = self.load_tasks()
         logger.info("🚀 TaskListBot initialization complete")
     
@@ -259,9 +263,14 @@ class TaskListBot:
             logger.warning(f"❌ Invalid task text from chat {chat_id}: {str(e)}")
             raise
         
-        logger.info(f"➕ Adding new task to chat {chat_id}")
-        
+        # Check task limit
         chat_tasks = self.get_chat_tasks(chat_id)
+        if len(chat_tasks) >= MAX_TASKS_PER_CHAT:
+            logger.warning(f"❌ Task limit reached for chat {chat_id}: {len(chat_tasks)}/{MAX_TASKS_PER_CHAT}")
+            raise ValueError(f"Task limit reached! Maximum {MAX_TASKS_PER_CHAT} tasks per chat. Please remove some tasks first.")
+        
+        logger.info(f"➕ Adding new task to chat {chat_id} ({len(chat_tasks) + 1}/{MAX_TASKS_PER_CHAT})")
+        
         task_id = len(chat_tasks) + 1
         new_task = {
             "id": task_id,
@@ -306,9 +315,9 @@ class TaskListBot:
         """Format the task list for display"""
         chat_tasks = self.get_chat_tasks(chat_id)
         if not chat_tasks:
-            return "📝 No tasks in the list yet!\n\nUse /add <task> to add a new task."
+            return f"📝 No tasks in the list yet!\n\nUse /add <task> to add a new task.\n\n📊 Task limit: {MAX_TASKS_PER_CHAT} per chat"
         
-        task_lines = ["📋 *Current Task List:*\n"]
+        task_lines = [f"📋 *Current Task List:* ({len(chat_tasks)}/{MAX_TASKS_PER_CHAT})\n"]
         for task in chat_tasks:
             # Escape Markdown special characters in task text
             escaped_text = self.escape_markdown(task['text'])
@@ -329,9 +338,9 @@ class TaskListBot:
         """Format the task list for display without Markdown"""
         chat_tasks = self.get_chat_tasks(chat_id)
         if not chat_tasks:
-            return "📝 No tasks in the list yet!\n\nUse /add <task> to add a new task."
+            return f"📝 No tasks in the list yet!\n\nUse /add <task> to add a new task.\n\n📊 Task limit: {MAX_TASKS_PER_CHAT} per chat"
         
-        task_lines = ["📋 Current Task List:\n"]
+        task_lines = [f"📋 Current Task List: ({len(chat_tasks)}/{MAX_TASKS_PER_CHAT})\n"]
         for task in chat_tasks:
             task_lines.append(f"{task['id']}. {task['text']}")
         
@@ -342,7 +351,7 @@ class TaskListBot:
         """Format the task list as buttons only - no text, just clickable task buttons"""
         chat_tasks = self.get_chat_tasks(chat_id)
         if not chat_tasks:
-            return "📝 No tasks in the list yet!\n\nUse /add <task> to add a new task.", None
+            return f"📝 No tasks in the list yet!\n\nUse /add <task> to add a new task.\n\n📊 Task limit: {MAX_TASKS_PER_CHAT} per chat", None
         
         keyboard_buttons = []
         
@@ -361,7 +370,7 @@ class TaskListBot:
             ])
         
         keyboard = InlineKeyboardMarkup(keyboard_buttons) if keyboard_buttons else None
-        return "📋 **Click any task to remove it:**", keyboard
+        return f"📋 **Click any task to remove it:** ({len(chat_tasks)}/{MAX_TASKS_PER_CHAT})", keyboard
 
 async def delete_user_message(update: Update):
     """Helper function to delete user's message (for cleanup)"""
