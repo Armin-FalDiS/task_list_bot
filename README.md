@@ -22,8 +22,6 @@ A simple Telegram bot that manages a shared task list for groups. Anyone in the 
 
 ## Quick Start
 
-### Option 1: Using Docker (Recommended)
-
 1. **Get a Telegram Bot Token:**
    - Message [@BotFather](https://t.me/botfather) on Telegram
    - Create a new bot with `/newbot`
@@ -40,18 +38,19 @@ A simple Telegram bot that manages a shared task list for groups. Anyone in the 
 
 3. **Run with Docker:**
    ```bash
-   # Using local build
+   # Polling mode (development)
    docker run -d \
      --name task-list-bot \
      --env-file .env \
      -v task_list_data:/app/data \
-     task-list-bot
+     ghcr.io/armin-faldis/task_list_bot:latest
    
-   # Or using the published image from GitHub Container Registry
+   # Webhook mode (production)
    docker run -d \
      --name task-list-bot \
      --env-file .env \
      -v task_list_data:/app/data \
+     -p 8443:8443 \
      ghcr.io/armin-faldis/task_list_bot:latest
    ```
 
@@ -60,48 +59,6 @@ A simple Telegram bot that manages a shared task list for groups. Anyone in the 
    - Add it to your group
    - Start using commands like `/add Buy groceries`
 
-### Option 2: Local Python Setup
-
-1. **Prerequisites:**
-   - Python 3.8 or higher
-   - pip
-
-2. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-3. **Set up environment:**
-   ```bash
-   # Copy the example environment file
-   cp env.example .env
-   
-   # Edit .env and add your bot token
-   nano .env
-   ```
-
-4. **Run the bot:**
-   ```bash
-   python bot.py
-   ```
-
-## Building the Docker Image
-
-If you want to build the Docker image yourself:
-
-```bash
-docker build -t task-list-bot .
-```
-
-## GitHub Container Registry
-
-This project automatically builds and publishes Docker images to GitHub Container Registry when you push to the main branch. The image is available at:
-
-```
-ghcr.io/armin-faldis/task_list_bot:latest
-```
-
-To use the published image, replace `armin-faldis` with your GitHub username in the Docker run command above.
 
 ## Usage Examples
 
@@ -144,6 +101,20 @@ The bot uses the following environment variables (configured via `.env` file):
 
 - `TELEGRAM_BOT_TOKEN` - Your Telegram bot token (required)
 - `TASK_FILE` - Path to the task list file (default: `task_list.json`)
+- `WEBHOOK_URL` - Webhook URL for production deployment (optional, enables webhook mode)
+- `WEBHOOK_PATH` - Webhook path endpoint (optional, defaults to `/task-bot`)
+
+### Webhook vs Polling
+
+- **Polling mode** (default): Bot actively checks for updates from Telegram
+  - Use when: Development, simple deployments
+  - Just set `TELEGRAM_BOT_TOKEN`
+
+- **Webhook mode**: Telegram sends updates directly to your bot
+  - Use when: Production, high-traffic bots
+  - Set both `TELEGRAM_BOT_TOKEN` and `WEBHOOK_URL`
+  - Requires HTTPS endpoint accessible from internet
+  - Bot listens on port 8443 (map with `-p 8443:8443` in Docker)
 
 ## Data Storage
 
@@ -177,13 +148,14 @@ The bot uses the following environment variables (configured via `.env` file):
 - Check that the volume is properly mounted
 - Verify the environment variable is set correctly
 
-## Development
+### Webhook issues
+- Ensure your webhook URL is accessible from the internet
+- Check that HTTPS is properly configured
+- Verify the bot is listening on port 8443
+- Check nginx/proxy configuration if using one
+- Make sure port 8443 is mapped in Docker (`-p 8443:8443`)
+- Verify the webhook path matches your nginx/proxy configuration
 
-To modify the bot:
-
-1. Edit `bot.py` with your changes
-2. Rebuild the Docker image: `docker build -t task-list-bot .`
-3. Restart the container with the new image
 
 ## License
 

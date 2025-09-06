@@ -607,9 +607,34 @@ def main():
     # Add callback query handler for inline keyboard buttons
     application.add_handler(CallbackQueryHandler(handle_callback_query))
     
-    # Start the bot
-    logger.info("Starting Task List Bot...")
-    application.run_polling()
+    # Check for webhook configuration
+    webhook_url = os.getenv('WEBHOOK_URL')
+    webhook_path = os.getenv('WEBHOOK_PATH', '/task-bot')
+    
+    if webhook_url:
+        # Use webhook mode
+        try:
+            logger.info(f"🌐 Starting bot with webhook mode...")
+            logger.info(f"📡 Webhook URL: {webhook_url}")
+            logger.info(f"🔌 Port: 8443")
+            logger.info(f"🛤️ Path: {webhook_path}")
+            
+            # Set webhook
+            application.run_webhook(
+                listen="0.0.0.0",
+                port=8443,
+                webhook_url=webhook_url,
+                url_path=webhook_path
+            )
+        except Exception as e:
+            logger.error(f"❌ Error starting webhook mode: {e}")
+            logger.info("🔄 Falling back to polling mode...")
+            application.run_polling()
+    else:
+        # Use polling mode (fallback)
+        logger.info("🔄 Starting bot with polling mode...")
+        logger.info("ℹ️ WEBHOOK_URL not set - using polling")
+        application.run_polling()
 
 if __name__ == '__main__':
     main()
