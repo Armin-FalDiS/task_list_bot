@@ -608,7 +608,7 @@ def generate_webhook_secret() -> str:
     """Generate a cryptographically secure random secret token"""
     return secrets.token_urlsafe(32)  # 32 bytes = 256 bits of entropy
 
-def main():
+async def main():
     """Main function to run the bot"""
     # Get bot token from environment variable
     bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -649,7 +649,7 @@ def main():
             
             # Set webhook with the generated secret token using the bot's built-in method
             try:
-                application.bot.set_webhook(
+                await application.bot.set_webhook(
                     url=webhook_url,
                     secret_token=webhook_secret
                 )
@@ -679,4 +679,5 @@ def main():
         application.run_polling()
 
 if __name__ == '__main__':
-    main()
+    import asyncio
+    asyncio.run(main())
