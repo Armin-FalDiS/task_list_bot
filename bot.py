@@ -649,11 +649,13 @@ async def main():
             
             # Set webhook with the generated secret token using the bot's built-in method
             try:
+                # Combine webhook URL with path
+                full_webhook_url = f"{webhook_url.rstrip('/')}{webhook_path}"
                 await application.bot.set_webhook(
-                    url=webhook_url,
+                    url=full_webhook_url,
                     secret_token=webhook_secret
                 )
-                logger.info("✅ Webhook set successfully with auto-generated secret token")
+                logger.info(f"✅ Webhook set successfully: {full_webhook_url}")
             except Exception as e:
                 logger.error(f"❌ Failed to set webhook: {e}")
                 logger.info("🔄 Falling back to polling mode...")
