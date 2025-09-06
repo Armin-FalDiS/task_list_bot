@@ -9,6 +9,9 @@ import json
 import logging
 import stat
 import time
+import html
+import re
+import secrets
 from typing import Dict, List, Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -33,6 +36,39 @@ class TaskListBot:
         logger.info(f"📁 Task file location: {TASK_FILE}")
         self.tasks = self.load_tasks()
         logger.info("🚀 TaskListBot initialization complete")
+    
+    def sanitize_task_text(self, text: str) -> str:
+        """Sanitize and validate task text input"""
+        if not text or not isinstance(text, str):
+            raise ValueError("Task text must be a non-empty string")
+        
+        # Remove leading/trailing whitespace
+        text = text.strip()
+        
+        # Check length limits
+        if len(text) > 1000:
+            raise ValueError("Task text too long (max 1000 characters)")
+        
+        if len(text) < 1:
+            raise ValueError("Task text cannot be empty")
+        
+        # Remove or escape potentially dangerous characters
+        # Remove control characters except newlines and tabs
+        text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
+        
+        # Limit consecutive whitespace
+        text = re.sub(r'\s{3,}', ' ', text)
+        
+        return text
+    
+    def validate_callback_data(self, data: str) -> bool:
+        """Validate callback data format"""
+        if not data or not isinstance(data, str):
+            return False
+        
+        # Expected format: "remove_{chat_id}_{task_id}"
+        pattern = r'^remove_\d+_\d+$'
+        return bool(re.match(pattern, data))
     
     def load_tasks(self) -> Dict[int, List[Dict]]:
         """Load tasks from file, organized by chat_id"""
@@ -86,7 +122,7 @@ class TaskListBot:
                 
         except json.JSONDecodeError as e:
             logger.error(f"❌ JSON decode error in {TASK_FILE}: {e}")
-            logger.error(f"📄 File content preview: {content[:200]}...")
+            logger.error(f"📄 File content preview: {content[:50]}...")
             return {}
         except UnicodeDecodeError as e:
             logger.error(f"❌ Unicode decode error in {TASK_FILE}: {e}")
@@ -177,7 +213,7 @@ class TaskListBot:
             logger.error(f"❌ Unicode encode error writing to {TASK_FILE}: {e}")
         except Exception as e:
             logger.error(f"❌ Unexpected error saving tasks to {TASK_FILE}: {e}")
-            logger.error(f"📄 Task data preview: {str(self.tasks)[:200]}...")
+            logger.error(f"📄 Task data preview: {len(self.tasks)} chats, {sum(len(chat_tasks) for chat_tasks in self.tasks.values())} total tasks")
     
     def verify_persistence(self) -> bool:
         """Verify that the task file exists and contains valid data"""
@@ -216,13 +252,20 @@ class TaskListBot:
     
     def add_task(self, chat_id: int, task_text: str) -> int:
         """Add a new task to the list"""
-        logger.info(f"➕ Adding new task to chat {chat_id}: '{task_text[:50]}{'...' if len(task_text) > 50 else ''}'")
+        # Sanitize and validate input
+        try:
+            sanitized_text = self.sanitize_task_text(task_text)
+        except ValueError as e:
+            logger.warning(f"❌ Invalid task text from chat {chat_id}: {str(e)}")
+            raise
+        
+        logger.info(f"➕ Adding new task to chat {chat_id}")
         
         chat_tasks = self.get_chat_tasks(chat_id)
         task_id = len(chat_tasks) + 1
         new_task = {
             "id": task_id,
-            "text": task_text,
+            "text": sanitized_text,
             "added_by": "user"  # We could track user info here if needed
         }
         chat_tasks.append(new_task)
@@ -241,8 +284,7 @@ class TaskListBot:
         chat_tasks = self.get_chat_tasks(chat_id)
         for i, task in enumerate(chat_tasks):
             if task["id"] == task_id:
-                task_text = task["text"]
-                logger.info(f"📝 Found task to remove: '{task_text[:50]}{'...' if len(task_text) > 50 else ''}'")
+                logger.info(f"📝 Found task #{task_id} to remove")
                 
                 del chat_tasks[i]
                 # Renumber remaining tasks
@@ -445,6 +487,9 @@ async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Use /list to see all tasks or /remove {task_id} to remove this one.",
                 parse_mode='Markdown'
             )
+    except ValueError as e:
+        logger.warning(f"Invalid task input from chat {update.effective_chat.id}: {str(e)}")
+        await update.message.reply_text(f"❌ {str(e)}")
     except Exception as e:
         logger.error(f"Error adding task: {e}")
         await update.message.reply_text("❌ Error adding task. Please try again.")
@@ -520,23 +565,32 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if message_text.startswith("add ") or message_text.startswith("+ "):
         task_text = update.message.text[4:].strip()  # Remove "add " or "+ "
         if task_text:
-            chat_id = update.effective_chat.id
-            task_id = task_bot.add_task(chat_id, task_text)
-            
-            # Show updated task list with buttons
-            task_list, keyboard = task_bot.format_task_list_with_buttons(chat_id)
-            if keyboard:
-                await update.message.reply_text(
-                    f"✅ Added task #{task_id}: {task_bot.escape_markdown(task_text)}\n\n{task_list}",
-                    parse_mode='Markdown',
-                    reply_markup=keyboard
-                )
-            else:
-                await update.message.reply_text(
-                    f"✅ Added task #{task_id}: {task_text}"
-                )
-            # Clean up user's message
-            await delete_user_message(update)
+            try:
+                chat_id = update.effective_chat.id
+                task_id = task_bot.add_task(chat_id, task_text)
+                
+                # Show updated task list with buttons
+                task_list, keyboard = task_bot.format_task_list_with_buttons(chat_id)
+                if keyboard:
+                    await update.message.reply_text(
+                        f"✅ Added task #{task_id}: {task_bot.escape_markdown(task_text)}\n\n{task_list}",
+                        parse_mode='Markdown',
+                        reply_markup=keyboard
+                    )
+                else:
+                    await update.message.reply_text(
+                        f"✅ Added task #{task_id}: {task_text}"
+                    )
+                # Clean up user's message
+                await delete_user_message(update)
+            except ValueError as e:
+                logger.warning(f"Invalid task input from chat {update.effective_chat.id}: {str(e)}")
+                await update.message.reply_text(f"❌ {str(e)}")
+                await delete_user_message(update)
+            except Exception as e:
+                logger.error(f"Error adding task from text message: {e}")
+                await update.message.reply_text("❌ Error adding task. Please try again.")
+                await delete_user_message(update)
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle callback queries from inline keyboard buttons"""
@@ -547,6 +601,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
     
     try:
+        # Validate callback data format first
+        if not task_bot.validate_callback_data(query.data):
+            logger.warning(f"❌ Invalid callback data format: {query.data}")
+            await query.edit_message_text("❌ Invalid request format. Please try again.")
+            return
+        
         # Parse callback data: "remove_{chat_id}_{task_id}"
         if query.data.startswith("remove_"):
             parts = query.data.split("_")
@@ -582,6 +642,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     except Exception as e:
         logger.error(f"Error handling callback query: {e}")
         await query.edit_message_text("❌ An error occurred. Please try again.")
+
+def generate_webhook_secret() -> str:
+    """Generate a cryptographically secure random secret token"""
+    return secrets.token_urlsafe(32)  # 32 bytes = 256 bits of entropy
 
 def main():
     """Main function to run the bot"""
@@ -619,12 +683,30 @@ def main():
             logger.info(f"🔌 Port: 8443")
             logger.info(f"🛤️ Path: {webhook_path}")
             
-            # Set webhook
+            # Generate a new random secret token for this session
+            webhook_secret = generate_webhook_secret()
+            logger.info("🔐 Generated new webhook secret token for this session")
+            
+            # Set webhook with the generated secret token using the bot's built-in method
+            try:
+                application.bot.set_webhook(
+                    url=webhook_url,
+                    secret_token=webhook_secret
+                )
+                logger.info("✅ Webhook set successfully with auto-generated secret token")
+            except Exception as e:
+                logger.error(f"❌ Failed to set webhook: {e}")
+                logger.info("🔄 Falling back to polling mode...")
+                application.run_polling()
+                return
+            
+            # Run webhook with secret verification
             application.run_webhook(
                 listen="0.0.0.0",
                 port=8443,
                 webhook_url=webhook_url,
-                url_path=webhook_path
+                url_path=webhook_path,
+                secret_token=webhook_secret
             )
         except Exception as e:
             logger.error(f"❌ Error starting webhook mode: {e}")
