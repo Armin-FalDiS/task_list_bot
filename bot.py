@@ -659,26 +659,26 @@ async def main():
             except Exception as e:
                 logger.error(f"❌ Failed to set webhook: {e}")
                 logger.info("🔄 Falling back to polling mode...")
-                application.run_polling()
+                await application.run_polling()
                 return
             
             # Run webhook with secret verification
-            application.run_webhook(
+            await application.run_webhook(
                 listen="0.0.0.0",
                 port=8443,
-                webhook_url=webhook_url,
+                webhook_url=full_webhook_url,
                 url_path=webhook_path,
                 secret_token=webhook_secret
             )
         except Exception as e:
             logger.error(f"❌ Error starting webhook mode: {e}")
             logger.info("🔄 Falling back to polling mode...")
-            application.run_polling()
+            await application.run_polling()
     else:
         # Use polling mode (fallback)
         logger.info("🔄 Starting bot with polling mode...")
         logger.info("ℹ️ WEBHOOK_URL not set - using polling")
-        application.run_polling()
+        await application.run_polling()
 
 if __name__ == '__main__':
     import asyncio
