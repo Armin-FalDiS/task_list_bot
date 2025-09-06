@@ -647,38 +647,67 @@ async def main():
             webhook_secret = generate_webhook_secret()
             logger.info("🔐 Generated new webhook secret token for this session")
             
-            # Set webhook with the generated secret token using the bot's built-in method
-            try:
-                # Combine webhook URL with path
-                full_webhook_url = f"{webhook_url.rstrip('/')}{webhook_path}"
-                await application.bot.set_webhook(
-                    url=full_webhook_url,
-                    secret_token=webhook_secret
-                )
-                logger.info(f"✅ Webhook set successfully: {full_webhook_url}")
-            except Exception as e:
-                logger.error(f"❌ Failed to set webhook: {e}")
-                logger.info("🔄 Falling back to polling mode...")
-                await application.run_polling()
-                return
+            # Combine webhook URL with path
+            full_webhook_url = f"{webhook_url.rstrip('/')}{webhook_path}"
+            logger.info(f"🔗 Full webhook URL: {full_webhook_url}")
             
-            # Run webhook with secret verification
-            await application.run_webhook(
+            # Initialize and start webhook
+            await application.initialize()
+            await application.start()
+            await application.updater.start_webhook(
                 listen="0.0.0.0",
                 port=8443,
                 webhook_url=full_webhook_url,
                 url_path=webhook_path,
                 secret_token=webhook_secret
             )
+            logger.info("🌐 Webhook started successfully")
+            
+            # Keep the bot running
+            try:
+                await asyncio.Event().wait()
+            except KeyboardInterrupt:
+                logger.info("🛑 Shutting down bot...")
+            finally:
+                await application.updater.stop()
+                await application.stop()
+                await application.shutdown()
+                
         except Exception as e:
             logger.error(f"❌ Error starting webhook mode: {e}")
             logger.info("🔄 Falling back to polling mode...")
-            await application.run_polling()
+            await application.initialize()
+            await application.start()
+            await application.updater.start_polling()
+            logger.info("🔄 Polling started successfully")
+            
+            # Keep the bot running
+            try:
+                await asyncio.Event().wait()
+            except KeyboardInterrupt:
+                logger.info("🛑 Shutting down bot...")
+            finally:
+                await application.updater.stop()
+                await application.stop()
+                await application.shutdown()
     else:
         # Use polling mode (fallback)
         logger.info("🔄 Starting bot with polling mode...")
         logger.info("ℹ️ WEBHOOK_URL not set - using polling")
-        await application.run_polling()
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling()
+        logger.info("🔄 Polling started successfully")
+        
+        # Keep the bot running
+        try:
+            await asyncio.Event().wait()
+        except KeyboardInterrupt:
+            logger.info("🛑 Shutting down bot...")
+        finally:
+            await application.updater.stop()
+            await application.stop()
+            await application.shutdown()
 
 if __name__ == '__main__':
     import asyncio
