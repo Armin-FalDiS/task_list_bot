@@ -71,10 +71,11 @@ class TaskListBot:
             return False
         
         # Expected format: "remove_{chat_id}_{task_id}"
-        pattern = r'^remove_\d+_\d+$'
+        # Chat IDs can be negative (for groups), task IDs are always positive
+        pattern = r'^remove_-?\d+_\d+$'
         return bool(re.match(pattern, data))
     
-    def load_tasks(self) -> Dict[int, List[Dict]]:
+    def load_tasks(self) -> Dict[str, List[Dict]]:
         """Load tasks from file, organized by chat_id"""
         logger.info(f"🔄 Attempting to load tasks from: {TASK_FILE}")
         
@@ -558,7 +559,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     await query.answer()  # Acknowledge the callback query
     
     if not query.data:
+        logger.warning("❌ Received callback query without data")
         return
+    
+    logger.info(f"🔍 Received callback query: {query.data}")
     
     try:
         # Validate callback data format first
@@ -574,9 +578,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 chat_id = int(parts[1])
                 task_id = int(parts[2])
                 
+                logger.info(f"🔍 Parsed callback data - chat_id: {chat_id}, task_id: {task_id}")
+                logger.info(f"🔍 Query message chat id: {query.message.chat.id}")
+                
                 # Verify the callback is from the same chat
                 if query.message.chat.id == chat_id:
+                    logger.info(f"✅ Chat ID matches, attempting to remove task #{task_id}")
                     success, task_description = task_bot.remove_task(chat_id, task_id)
+                    logger.info(f"🔍 Task removal result: success={success}, description='{task_description}'")
                     if success:
                         # Show updated task list with buttons
                         task_list, keyboard = task_bot.format_task_list_with_buttons(chat_id)
@@ -596,6 +605,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                             f"❌ Task #{task_id} not found or already removed!"
                         )
                 else:
+                    logger.warning(f"❌ Chat ID mismatch - callback chat_id: {chat_id}, message chat_id: {query.message.chat.id}")
                     await query.edit_message_text("❌ This button is not for this chat!")
     except (ValueError, IndexError) as e:
         logger.error(f"Error parsing callback data: {e}")
