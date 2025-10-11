@@ -318,7 +318,7 @@ class TaskListBot:
         if not chat_tasks:
             return f"📝 No tasks in the list yet!\n\nUse /add <task> to add a new task.\n\n📊 Task limit: {MAX_TASKS_PER_CHAT} per chat"
         
-        task_lines = [f"📋 *Current Task List:* ({len(chat_tasks)}/{MAX_TASKS_PER_CHAT})\n"]
+        task_lines = [f"📋 *Current Task List:*\n"]
         for task in chat_tasks:
             # Escape Markdown special characters in task text
             escaped_text = self.escape_markdown(task['text'])
@@ -341,7 +341,7 @@ class TaskListBot:
         if not chat_tasks:
             return f"📝 No tasks in the list yet!\n\nUse /add <task> to add a new task.\n\n📊 Task limit: {MAX_TASKS_PER_CHAT} per chat"
         
-        task_lines = [f"📋 Current Task List: ({len(chat_tasks)}/{MAX_TASKS_PER_CHAT})\n"]
+        task_lines = [f"📋 Current Task List:\n"]
         for task in chat_tasks:
             task_lines.append(f"{task['id']}. {task['text']}")
         
@@ -371,7 +371,7 @@ class TaskListBot:
             ])
         
         keyboard = InlineKeyboardMarkup(keyboard_buttons) if keyboard_buttons else None
-        return f"📋 **Click any task to remove it:** ({len(chat_tasks)}/{MAX_TASKS_PER_CHAT})", keyboard
+        return f"📋 **Click any task to remove it:**", keyboard
 
 async def delete_user_message(update: Update):
     """Helper function to delete user's message (for cleanup)"""
@@ -523,9 +523,14 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_text = update.message.text.lower()
     
     # Simple keyword detection for adding tasks
-    if message_text.startswith("add ") or message_text.startswith("+ "):
-        task_text = update.message.text[4:].strip()  # Remove "add " or "+ "
-        if task_text:
+    if message_text.startswith("add "):
+        task_text = update.message.text[4:].strip()  # Remove "add "
+    elif message_text.startswith("+ "):
+        task_text = update.message.text[2:].strip()  # Remove "+ "
+    else:
+        task_text = None
+    
+    if task_text:
             try:
                 chat_id = update.effective_chat.id
                 task_id = task_bot.add_task(chat_id, task_text)
