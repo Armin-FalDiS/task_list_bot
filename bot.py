@@ -41,6 +41,18 @@ class TaskListBot:
         self.tasks = self.load_tasks()
         logger.info("🚀 TaskListBot initialization complete")
     
+    def get_storage_key(self, chat_id: int, thread_id: Optional[int]) -> str:
+        """Build the storage key for a chat/thread combination"""
+        if thread_id is None:
+            return str(chat_id)
+        return f"{chat_id}:{thread_id}"
+    
+    def describe_context(self, chat_id: int, thread_id: Optional[int]) -> str:
+        """Return a human-readable description of the current chat/thread context"""
+        if thread_id is None:
+            return f"chat {chat_id}"
+        return f"chat {chat_id}, thread {thread_id}"
+    
     def sanitize_task_text(self, text: str) -> str:
         """Sanitize and validate task text input"""
         if not text or not isinstance(text, str):
@@ -70,9 +82,9 @@ class TaskListBot:
         if not data or not isinstance(data, str):
             return False
         
-        # Expected format: "remove_{chat_id}_{task_id}"
-        # Chat IDs can be negative (for groups), task IDs are always positive
-        pattern = r'^remove_-?\d+_\d+$'
+        # Expected format: "remove_{chat_id}_{task_id}" (legacy) or "remove_{chat_id}_{thread_id}_{task_id}"
+        # Chat IDs can be negative (for groups), thread/task IDs are always positive
+        pattern = r'^remove_-?\d+_(?:\d+_)?\d+$'
         return bool(re.match(pattern, data))
     
     def load_tasks(self) -> Dict[str, List[Dict]]:
@@ -251,11 +263,36 @@ class TaskListBot:
             logger.error(f"❌ Persistence verification failed: {e}")
             return False
     
-    def get_chat_tasks(self, chat_id: int) -> List[Dict]:
-        """Get tasks for a specific chat"""
-        return self.tasks.get(str(chat_id), [])
+    def get_tasks_with_context(
+        self,
+        chat_id: int,
+        thread_id: Optional[int] = None,
+        include_fallback: bool = True
+    ) -> tuple[List[Dict], Optional[int]]:
+        """
+        Retrieve tasks along with the storage context (thread id) they belong to.
+        If include_fallback is True and no thread-specific list exists, fall back to the chat-wide list.
+        """
+        key = self.get_storage_key(chat_id, thread_id)
+        if key in self.tasks:
+            return self.tasks[key], thread_id
+        
+        if include_fallback and thread_id is not None:
+            fallback_key = self.get_storage_key(chat_id, None)
+            if fallback_key in self.tasks:
+                logger.info(
+                    f"ℹ️ Falling back to chat-wide task list for {self.describe_context(chat_id, thread_id)}"
+                )
+                return self.tasks[fallback_key], None
+        
+        return [], thread_id
     
-    def add_task(self, chat_id: int, task_text: str) -> int:
+    def get_chat_tasks(self, chat_id: int, thread_id: Optional[int] = None, include_fallback: bool = True) -> List[Dict]:
+        """Get tasks for a specific chat and optional thread"""
+        tasks, _ = self.get_tasks_with_context(chat_id, thread_id, include_fallback)
+        return tasks
+    
+    def add_task(self, chat_id: int, task_text: str, thread_id: Optional[int] = None) -> int:
         """Add a new task to the list"""
         # Sanitize and validate input
         try:
@@ -265,12 +302,14 @@ class TaskListBot:
             raise
         
         # Check task limit
-        chat_tasks = self.get_chat_tasks(chat_id)
+        chat_tasks, storage_thread_id = self.get_tasks_with_context(chat_id, thread_id, include_fallback=False)
         if len(chat_tasks) >= MAX_TASKS_PER_CHAT:
-            logger.warning(f"❌ Task limit reached for chat {chat_id}: {len(chat_tasks)}/{MAX_TASKS_PER_CHAT}")
+            context_desc = self.describe_context(chat_id, storage_thread_id)
+            logger.warning(f"❌ Task limit reached for {context_desc}: {len(chat_tasks)}/{MAX_TASKS_PER_CHAT}")
             raise ValueError(f"Task limit reached! Maximum {MAX_TASKS_PER_CHAT} tasks per chat. Please remove some tasks first.")
         
-        logger.info(f"➕ Adding new task to chat {chat_id} ({len(chat_tasks) + 1}/{MAX_TASKS_PER_CHAT})")
+        context_desc = self.describe_context(chat_id, storage_thread_id)
+        logger.info(f"➕ Adding new task to {context_desc} ({len(chat_tasks) + 1}/{MAX_TASKS_PER_CHAT})")
         
         task_id = len(chat_tasks) + 1
         new_task = {
@@ -278,19 +317,20 @@ class TaskListBot:
             "text": sanitized_text
         }
         chat_tasks.append(new_task)
-        self.tasks[str(chat_id)] = chat_tasks
+        key = self.get_storage_key(chat_id, storage_thread_id)
+        self.tasks[key] = chat_tasks
         
-        logger.info(f"💾 Triggering save after adding task #{task_id} to chat {chat_id}")
+        logger.info(f"💾 Triggering save after adding task #{task_id} to {context_desc}")
         self.save_tasks()
         
-        logger.info(f"✅ Task #{task_id} successfully added and saved")
+        logger.info(f"✅ Task #{task_id} successfully added and saved for {context_desc}")
         return task_id
     
-    def remove_task(self, chat_id: int, task_id: int) -> tuple[bool, str]:
+    def remove_task(self, chat_id: int, task_id: int, thread_id: Optional[int] = None) -> tuple[bool, str]:
         """Remove a task by ID and return (success, task_description)"""
-        logger.info(f"🗑️ Attempting to remove task #{task_id} from chat {chat_id}")
-        
-        chat_tasks = self.get_chat_tasks(chat_id)
+        chat_tasks, storage_thread_id = self.get_tasks_with_context(chat_id, thread_id, include_fallback=True)
+        context_desc = self.describe_context(chat_id, storage_thread_id)
+        logger.info(f"🗑️ Attempting to remove task #{task_id} from {context_desc}")
         for i, task in enumerate(chat_tasks):
             if task["id"] == task_id:
                 task_description = task["text"]
@@ -301,20 +341,21 @@ class TaskListBot:
                 for j, remaining_task in enumerate(chat_tasks):
                     remaining_task["id"] = j + 1
                 
-                self.tasks[str(chat_id)] = chat_tasks
+                key = self.get_storage_key(chat_id, storage_thread_id)
+                self.tasks[key] = chat_tasks
                 
-                logger.info(f"💾 Triggering save after removing task #{task_id} from chat {chat_id}")
+                logger.info(f"💾 Triggering save after removing task #{task_id} from {context_desc}")
                 self.save_tasks()
                 
-                logger.info(f"✅ Task #{task_id} successfully removed and saved")
+                logger.info(f"✅ Task #{task_id} successfully removed and saved for {context_desc}")
                 return True, task_description
         
-        logger.warning(f"⚠️ Task #{task_id} not found in chat {chat_id}")
+        logger.warning(f"⚠️ Task #{task_id} not found in {context_desc}")
         return False, ""
     
-    def format_task_list(self, chat_id: int) -> str:
+    def format_task_list(self, chat_id: int, thread_id: Optional[int] = None) -> str:
         """Format the task list for display"""
-        chat_tasks = self.get_chat_tasks(chat_id)
+        chat_tasks, _ = self.get_tasks_with_context(chat_id, thread_id)
         if not chat_tasks:
             return f"📝 No tasks in the list yet!\n\nUse /add <task> to add a new task.\n\n📊 Task limit: {MAX_TASKS_PER_CHAT} per chat"
         
@@ -335,9 +376,9 @@ class TaskListBot:
             text = text.replace(char, f'\\{char}')
         return text
     
-    def format_task_list_plain(self, chat_id: int) -> str:
+    def format_task_list_plain(self, chat_id: int, thread_id: Optional[int] = None) -> str:
         """Format the task list for display without Markdown"""
-        chat_tasks = self.get_chat_tasks(chat_id)
+        chat_tasks, _ = self.get_tasks_with_context(chat_id, thread_id)
         if not chat_tasks:
             return f"📝 No tasks in the list yet!\n\nUse /add <task> to add a new task.\n\n📊 Task limit: {MAX_TASKS_PER_CHAT} per chat"
         
@@ -348,9 +389,9 @@ class TaskListBot:
         task_lines.append(f"\n💡 Click on any task button to remove it")
         return "\n".join(task_lines)
     
-    def format_task_list_with_buttons(self, chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    def format_task_list_with_buttons(self, chat_id: int, thread_id: Optional[int] = None) -> tuple[str, Optional[InlineKeyboardMarkup]]:
         """Format the task list as buttons only - no text, just clickable task buttons"""
-        chat_tasks = self.get_chat_tasks(chat_id)
+        chat_tasks, storage_thread_id = self.get_tasks_with_context(chat_id, thread_id)
         if not chat_tasks:
             return f"📝 No tasks in the list yet!\n\nUse /add <task> to add a new task.\n\n📊 Task limit: {MAX_TASKS_PER_CHAT} per chat", None
         
@@ -363,10 +404,15 @@ class TaskListBot:
                 task_text = task_text[:47] + "..."
             
             # Create a button for each task - the button text IS the task
+            if storage_thread_id is not None:
+                callback_data = f"remove_{chat_id}_{storage_thread_id}_{task['id']}"
+            else:
+                callback_data = f"remove_{chat_id}_{task['id']}"
+            
             keyboard_buttons.append([
                 InlineKeyboardButton(
                     f"{task['id']}. {task_text}", 
-                    callback_data=f"remove_{chat_id}_{task['id']}"
+                    callback_data=callback_data
                 )
             ])
         
@@ -391,14 +437,16 @@ async def show_text_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         chat_id = update.effective_chat.id
-        task_list = task_bot.format_task_list(chat_id)
+        thread_id = update.message.message_thread_id
+        task_list = task_bot.format_task_list(chat_id, thread_id)
         await update.message.reply_text(task_list, parse_mode='Markdown')
     except Exception as e:
         logger.error(f"Error sending text task list: {e}")
         # Fallback: send without Markdown formatting
         try:
             chat_id = update.effective_chat.id
-            task_list = task_bot.format_task_list_plain(chat_id)
+            thread_id = update.message.message_thread_id
+            task_list = task_bot.format_task_list_plain(chat_id, thread_id)
             await update.message.reply_text(task_list)
         except Exception as e2:
             logger.error(f"Error sending plain text task list: {e2}")
@@ -441,7 +489,8 @@ async def show_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         chat_id = update.effective_chat.id
-        task_list, keyboard = task_bot.format_task_list_with_buttons(chat_id)
+        thread_id = update.message.message_thread_id
+        task_list, keyboard = task_bot.format_task_list_with_buttons(chat_id, thread_id)
         
         if keyboard:
             await update.message.reply_text(task_list, parse_mode='Markdown', reply_markup=keyboard)
@@ -452,7 +501,8 @@ async def show_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Fallback: send without Markdown formatting
         try:
             chat_id = update.effective_chat.id
-            task_list = task_bot.format_task_list_plain(chat_id)
+            thread_id = update.message.message_thread_id
+            task_list = task_bot.format_task_list_plain(chat_id, thread_id)
             await update.message.reply_text(task_list)
         except Exception as e2:
             logger.error(f"Error sending plain task list: {e2}")
@@ -478,11 +528,12 @@ async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         chat_id = update.effective_chat.id
+        thread_id = update.message.message_thread_id
         task_text = " ".join(context.args)
-        task_id = task_bot.add_task(chat_id, task_text)
+        task_id = task_bot.add_task(chat_id, task_text, thread_id)
         
         # Show updated task list with buttons
-        task_list, keyboard = task_bot.format_task_list_with_buttons(chat_id)
+        task_list, keyboard = task_bot.format_task_list_with_buttons(chat_id, thread_id)
         if keyboard:
             await update.message.reply_text(
                 f"✅ Added task #{task_id}: {task_bot.escape_markdown(task_text)}\n\n{task_list}",
@@ -521,6 +572,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     message_text = update.message.text.lower()
+    thread_id = update.message.message_thread_id
     
     # Simple keyword detection for adding tasks
     if message_text.startswith("add "):
@@ -531,32 +583,32 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         task_text = None
     
     if task_text:
-            try:
-                chat_id = update.effective_chat.id
-                task_id = task_bot.add_task(chat_id, task_text)
-                
-                # Show updated task list with buttons
-                task_list, keyboard = task_bot.format_task_list_with_buttons(chat_id)
-                if keyboard:
-                    await update.message.reply_text(
-                        f"✅ Added task #{task_id}: {task_bot.escape_markdown(task_text)}\n\n{task_list}",
-                        parse_mode='Markdown',
-                        reply_markup=keyboard
-                    )
-                else:
-                    await update.message.reply_text(
-                        f"✅ Added task #{task_id}: {task_text}"
-                    )
-                # Clean up user's message
-                await delete_user_message(update)
-            except ValueError as e:
-                logger.warning(f"Invalid task input from chat {update.effective_chat.id}: {str(e)}")
-                await update.message.reply_text(f"❌ {str(e)}")
-                await delete_user_message(update)
-            except Exception as e:
-                logger.error(f"Error adding task from text message: {e}")
-                await update.message.reply_text("❌ Error adding task. Please try again.")
-                await delete_user_message(update)
+        try:
+            chat_id = update.effective_chat.id
+            task_id = task_bot.add_task(chat_id, task_text, thread_id)
+            
+            # Show updated task list with buttons
+            task_list, keyboard = task_bot.format_task_list_with_buttons(chat_id, thread_id)
+            if keyboard:
+                await update.message.reply_text(
+                    f"✅ Added task #{task_id}: {task_bot.escape_markdown(task_text)}\n\n{task_list}",
+                    parse_mode='Markdown',
+                    reply_markup=keyboard
+                )
+            else:
+                await update.message.reply_text(
+                    f"✅ Added task #{task_id}: {task_text}"
+                )
+            # Clean up user's message
+            await delete_user_message(update)
+        except ValueError as e:
+            logger.warning(f"Invalid task input from chat {update.effective_chat.id}: {str(e)}")
+            await update.message.reply_text(f"❌ {str(e)}")
+            await delete_user_message(update)
+        except Exception as e:
+            logger.error(f"Error adding task from text message: {e}")
+            await update.message.reply_text("❌ Error adding task. Please try again.")
+            await delete_user_message(update)
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle callback queries from inline keyboard buttons"""
@@ -579,39 +631,63 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         # Parse callback data: "remove_{chat_id}_{task_id}"
         if query.data.startswith("remove_"):
             parts = query.data.split("_")
-            if len(parts) == 3:
-                chat_id = int(parts[1])
-                task_id = int(parts[2])
-                
-                logger.info(f"🔍 Parsed callback data - chat_id: {chat_id}, task_id: {task_id}")
-                logger.info(f"🔍 Query message chat id: {query.message.chat.id}")
-                
-                # Verify the callback is from the same chat
-                if query.message.chat.id == chat_id:
-                    logger.info(f"✅ Chat ID matches, attempting to remove task #{task_id}")
-                    success, task_description = task_bot.remove_task(chat_id, task_id)
-                    logger.info(f"🔍 Task removal result: success={success}, description='{task_description}'")
-                    if success:
-                        # Show updated task list with buttons
-                        task_list, keyboard = task_bot.format_task_list_with_buttons(chat_id)
-                        if keyboard:
-                            await query.edit_message_text(
-                                f"✅ Removed task #{task_id}: {task_bot.escape_markdown(task_description)}\n\n{task_list}",
-                                parse_mode='Markdown',
-                                reply_markup=keyboard
-                            )
-                        else:
-                            await query.edit_message_text(
-                                f"✅ Removed task #{task_id}: {task_description}\n\n"
-                                "📝 No tasks remaining in the list."
-                            )
-                    else:
-                        await query.edit_message_text(
-                            f"❌ Task #{task_id} not found or already removed!"
-                        )
+            chat_id = None
+            thread_id = None
+            task_id = None
+            
+            try:
+                if len(parts) == 3:
+                    chat_id = int(parts[1])
+                    task_id = int(parts[2])
+                elif len(parts) == 4:
+                    chat_id = int(parts[1])
+                    thread_id = int(parts[2])
+                    task_id = int(parts[3])
                 else:
-                    logger.warning(f"❌ Chat ID mismatch - callback chat_id: {chat_id}, message chat_id: {query.message.chat.id}")
-                    await query.edit_message_text("❌ This button is not for this chat!")
+                    raise ValueError("Unexpected number of parts in callback data")
+            except ValueError as parse_error:
+                logger.error(f"Error parsing callback data parts: {parse_error}")
+                await query.edit_message_text("❌ Error processing request. Please try again.")
+                return
+            
+            logger.info(f"🔍 Parsed callback data - chat_id: {chat_id}, thread_id: {thread_id}, task_id: {task_id}")
+            message_thread_id = getattr(query.message, "message_thread_id", None)
+            logger.info(f"🔍 Query message chat id: {query.message.chat.id}, thread id: {message_thread_id}")
+            
+            # Verify the callback is from the same chat/thread context
+            if query.message.chat.id != chat_id:
+                logger.warning(f"❌ Chat ID mismatch - callback chat_id: {chat_id}, message chat_id: {query.message.chat.id}")
+                await query.edit_message_text("❌ This button is not for this chat!")
+                return
+            
+            if thread_id is not None:
+                normalized_message_thread_id = message_thread_id if message_thread_id is not None else 0
+                if thread_id != normalized_message_thread_id:
+                    logger.warning(f"❌ Thread ID mismatch - callback thread_id: {thread_id}, message thread_id: {message_thread_id}")
+                    await query.edit_message_text("❌ This button is not for this topic!")
+                    return
+
+            logger.info(f"✅ Context matches, attempting to remove task #{task_id}")
+            success, task_description = task_bot.remove_task(chat_id, task_id, thread_id)
+            logger.info(f"🔍 Task removal result: success={success}, description='{task_description}'")
+            if success:
+                # Show updated task list with buttons
+                task_list, keyboard = task_bot.format_task_list_with_buttons(chat_id, thread_id)
+                if keyboard:
+                    await query.edit_message_text(
+                        f"✅ Removed task #{task_id}: {task_bot.escape_markdown(task_description)}\n\n{task_list}",
+                        parse_mode='Markdown',
+                        reply_markup=keyboard
+                    )
+                else:
+                    await query.edit_message_text(
+                        f"✅ Removed task #{task_id}: {task_description}\n\n"
+                        "📝 No tasks remaining in the list."
+                    )
+            else:
+                await query.edit_message_text(
+                    f"❌ Task #{task_id} not found or already removed!"
+                )
     except (ValueError, IndexError) as e:
         logger.error(f"Error parsing callback data: {e}")
         await query.edit_message_text("❌ Error processing request. Please try again.")
