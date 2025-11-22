@@ -266,30 +266,21 @@ class TaskListBot:
     def get_tasks_with_context(
         self,
         chat_id: int,
-        thread_id: Optional[int] = None,
-        include_fallback: bool = True
+        thread_id: Optional[int] = None
     ) -> tuple[List[Dict], Optional[int]]:
         """
         Retrieve tasks along with the storage context (thread id) they belong to.
-        If include_fallback is True and no thread-specific list exists, fall back to the chat-wide list.
+        General chat and threads are considered separate.
         """
         key = self.get_storage_key(chat_id, thread_id)
         if key in self.tasks:
             return self.tasks[key], thread_id
         
-        if include_fallback and thread_id is not None:
-            fallback_key = self.get_storage_key(chat_id, None)
-            if fallback_key in self.tasks:
-                logger.info(
-                    f"ℹ️ Falling back to chat-wide task list for {self.describe_context(chat_id, thread_id)}"
-                )
-                return self.tasks[fallback_key], None
-        
         return [], thread_id
     
-    def get_chat_tasks(self, chat_id: int, thread_id: Optional[int] = None, include_fallback: bool = True) -> List[Dict]:
+    def get_chat_tasks(self, chat_id: int, thread_id: Optional[int] = None) -> List[Dict]:
         """Get tasks for a specific chat and optional thread"""
-        tasks, _ = self.get_tasks_with_context(chat_id, thread_id, include_fallback)
+        tasks, _ = self.get_tasks_with_context(chat_id, thread_id)
         return tasks
     
     def add_task(self, chat_id: int, task_text: str, thread_id: Optional[int] = None) -> int:
@@ -302,7 +293,7 @@ class TaskListBot:
             raise
         
         # Check task limit
-        chat_tasks, storage_thread_id = self.get_tasks_with_context(chat_id, thread_id, include_fallback=False)
+        chat_tasks, storage_thread_id = self.get_tasks_with_context(chat_id, thread_id)
         if len(chat_tasks) >= MAX_TASKS_PER_CHAT:
             context_desc = self.describe_context(chat_id, storage_thread_id)
             logger.warning(f"❌ Task limit reached for {context_desc}: {len(chat_tasks)}/{MAX_TASKS_PER_CHAT}")
@@ -328,7 +319,7 @@ class TaskListBot:
     
     def remove_task(self, chat_id: int, task_id: int, thread_id: Optional[int] = None) -> tuple[bool, str]:
         """Remove a task by ID and return (success, task_description)"""
-        chat_tasks, storage_thread_id = self.get_tasks_with_context(chat_id, thread_id, include_fallback=True)
+        chat_tasks, storage_thread_id = self.get_tasks_with_context(chat_id, thread_id)
         context_desc = self.describe_context(chat_id, storage_thread_id)
         logger.info(f"🗑️ Attempting to remove task #{task_id} from {context_desc}")
         for i, task in enumerate(chat_tasks):
