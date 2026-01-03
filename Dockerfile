@@ -11,7 +11,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the bot script and database files
-COPY bot.py database.py run_migrations.py start.sh ./
+COPY bot.py task_list.py handlers.py utils.py database.py run_migrations.py start.sh ./
 COPY migrations ./migrations
 
 # Create a non-root user for security

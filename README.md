@@ -7,6 +7,7 @@ A secure and user-friendly Telegram bot that manages task lists. Features clicka
 - ✅ **Add tasks** with `/add` command or natural language (`add task` or `+ task`)
 - 🖱️ **Click to remove** - Interactive buttons for easy task removal
 - 📋 **View tasks** as clickable buttons or plain text
+- 👤 **Assign tasks** to users with `/assign` command
 - 🔢 **Automatic ID assignment** - Each task gets a unique database ID
 - 💾 **PostgreSQL storage** - Persistent, concurrent-safe database storage
 - 🔐 **Security features** - Input validation, webhook authentication, secure logging
@@ -18,11 +19,21 @@ A secure and user-friendly Telegram bot that manages task lists. Features clicka
 - `/start` - Show bot information and available commands
 - `/list` - Display tasks as clickable buttons (default view)
 - `/text` - Display tasks as plain text list
-- `/add <task>` - Add a new task to the list
+- `/mytasks` - Show tasks assigned to you (all tasks in private chats, current thread tasks in groups)
+- `/add <task> [description]` - Add a new task to the list (multi-line for description)
+- `/remove <task_id>` - Remove a task from the list
+- `/assign <task_id> [@username]` - Assign a task to a user (reply to a message or mention them)
+- `/details <task_id> [description]` - Set or view task details (view if no description provided)
+- `/deadline <task_id> [YYYY-MM-DD]` - Set or view task deadline (view if no date provided, use "clear" to remove)
 
-**Natural language support:**
-- `add Buy groceries` - Add a task
-- `+ Call mom` - Add a task (alternative syntax)
+**Natural language & shorthand support:**
+- `+ Task title` - Add a new task (space required after +)
+- `+ Task title\nDescription` - Add a new task with description in one go
+- `-1` - Remove task #1
+- `@1 @username` - Assign task #1 to a user
+- `?1` - View details of task #1
+- `+1\nDescription here` - Set details for task #1 (multi-line, no space)
+- `+1+\nAppend text` - Append to task #1 details (multi-line, no space)
 
 ## 🚀 Quick Start
 
@@ -71,8 +82,19 @@ docker run -d \
 ### Adding Tasks
 ```
 /add Buy groceries
-/add Call mom
-/add Finish project report
++ Call mom
+add Finish project report
+```
+
+**Add task with description (multi-line):**
+```
+/add Buy groceries
+Remember to get milk and eggs
+```
+or with shorthand:
+```
++ Buy groceries
+Remember to get milk and eggs
 ```
 
 ### Viewing Tasks
@@ -88,8 +110,72 @@ docker run -d \
 [3. Finish project report]
 ```
 
+### Viewing Your Assigned Tasks
+View tasks assigned to you:
+
+**In private chats:**
+Shows all tasks assigned to you across all chats:
+```
+/mytasks
+```
+**Output:**
+```
+👤 Your Tasks (3 total):
+
+💬 Chat 123456789:
+  • Task #1: Buy groceries 📝
+  • Task #2: Call mom
+
+💬 Chat 987654321, Thread 5:
+  • Task #3: Finish report
+
+💡 Use /details <task_id> in the respective chat to view full details.
+```
+
+**In groups:**
+Shows only tasks assigned to you in the current chat context:
+- If used in a thread: shows tasks in that specific thread
+- If used outside a thread: shows tasks in the main chat (thread_id IS NULL)
+
+```
+/mytasks
+```
+**Output (in thread):**
+```
+👤 Your Tasks in this thread (2 total):
+
+  • Task #1: Buy groceries 📝
+  • Task #2: Call mom
+
+💡 Use /details <task_id> to view full details.
+```
+
+**Output (outside thread):**
+```
+👤 Your Tasks in this chat (1 total):
+
+  • Task #1: Buy groceries 📝
+
+💡 Use /details <task_id> to view full details.
+```
+
 ### Removing Tasks
-Simply **click on any task button** to remove it! The bot will show:
+Remove tasks in multiple ways:
+
+**1. Click on a task button:**
+Simply **click on any task button** to remove it!
+
+**2. Use the /remove command:**
+```
+/remove 2
+```
+
+**3. Use shorthand:**
+```
+-2
+```
+
+**Output:**
 ```
 ✅ Removed task #2: Call mom
 
@@ -97,6 +183,99 @@ Simply **click on any task button** to remove it! The bot will show:
 [1. Buy groceries]
 [2. Finish project report]
 ```
+
+### Assigning Tasks
+Assign tasks to users in multiple ways:
+
+**1. Reply to a message with command:**
+```
+[Reply to user's message]
+/assign 1
+```
+
+**2. Reply to a message with shorthand:**
+```
+[Reply to user's message]
+@1
+```
+
+**3. Mention a user:**
+```
+/assign 1 @username
+```
+
+**Output:**
+```
+✅ Assigned task #1 to @username.
+```
+
+Tasks with assignees are marked with a 👤 indicator in the task list.
+
+### Task Details
+Add detailed descriptions to tasks:
+
+**Set details:**
+```
+/details 1 This task requires completing the report by Friday and sending it to the team
+```
+or with shorthand (multi-line):
+```
++1
+This task requires completing the report by Friday and sending it to the team
+```
+
+**Output:**
+```
+✅ Updated details for task #1:
+
+This task requires completing the report by Friday and sending it to the team
+```
+
+**View details:**
+```
+/details 1
+```
+or with shorthand:
+```
+?1
+```
+
+**Output:**
+```
+📋 Task #1: Buy groceries
+
+📝 Details:
+This task requires completing the report by Friday and sending it to the team
+
+👤 Assigned to: @username
+```
+
+Tasks with details are marked with a 📝 indicator in the task list.
+
+### Task Deadlines
+Set deadlines for tasks:
+
+**Set deadline:**
+```
+/deadline 1 2024-12-31
+```
+
+**View deadline:**
+```
+/deadline 1
+```
+
+**Remove deadline:**
+```
+/deadline 1 clear
+```
+
+**Output:**
+```
+✅ Set deadline for task #1 to 2024-12-31.
+```
+
+Tasks with deadlines are marked with a 📅 indicator in the task list.
 
 ## ⚙️ Configuration
 
@@ -240,13 +419,12 @@ See `migrations/README.md` for detailed migration guidelines.
 ## 🐳 Docker & Production
 
 ### Nginx Configuration
-The included `nginx.conf` shows proper webhook setup:
 ```nginx
 server {
-    listen 8443 ssl;
+    listen 443 ssl;
     server_name yourdomain.com;
     
-    ssl_certificate /path/to/yourertificate.crt;
+    ssl_certificate /path/to/your/certificate.crt;
     ssl_certificate_key /path/to/your/private.key;
     
     location /task-bot {
@@ -259,6 +437,8 @@ server {
     }
 }
 ```
+
+**Note:** The bot listens on port 8443 internally. Nginx should listen on port 443 (standard HTTPS) and proxy to the bot on 8443.
 
 ### Docker Security
 - ✅ **Non-root user** (`botuser`)
@@ -288,6 +468,25 @@ server {
 - ✅ Confirm port 8443 is mapped in Docker
 - ✅ Check webhook path matches nginx configuration
 
+
+## 📁 Project Structure
+
+```
+task_list_bot/
+├── bot.py              # Main entry point and application setup
+├── task_list.py        # TaskListBot class with database operations
+├── handlers.py         # Command, message, and callback handlers
+├── utils.py            # Utility functions (markdown escaping, etc.)
+├── database.py         # PostgreSQL connection pool management
+├── run_migrations.py   # Database migration runner
+├── migrate_json_to_postgres.py  # One-time JSON to PostgreSQL migration
+├── start.sh            # Container startup script
+├── Dockerfile          # Docker container definition
+├── requirements.txt    # Python dependencies
+└── migrations/         # Database migration files
+    ├── 001_initial_schema.sql
+    └── README.md
+```
 
 ## 📊 Dependencies
 
