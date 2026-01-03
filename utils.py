@@ -1,5 +1,6 @@
 import logging
 import secrets
+from typing import Optional
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -30,3 +31,29 @@ async def delete_user_message(update: Update):
 
 def generate_webhook_secret() -> str:
     return secrets.token_urlsafe(32)
+
+def get_thread_id(update) -> Optional[int]:
+    if not update.message:
+        return None
+    
+    chat = update.effective_chat
+    if chat.type != 'supergroup':
+        return None
+    
+    if not getattr(chat, 'is_forum', False):
+        return None
+    
+    return update.message.message_thread_id
+
+def get_thread_id_from_message(message) -> Optional[int]:
+    if not message:
+        return None
+    
+    chat = message.chat
+    if chat.type != 'supergroup':
+        return None
+    
+    if not getattr(chat, 'is_forum', False):
+        return None
+    
+    return getattr(message, 'message_thread_id', None)

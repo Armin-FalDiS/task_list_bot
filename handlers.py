@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import ContextTypes
 from task_list import TaskListBot
-from utils import delete_user_message
+from utils import delete_user_message, get_thread_id, get_thread_id_from_message
 
 load_dotenv()
 
@@ -28,7 +28,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/assign <task_id> @username - Assign a task to someone\n"
         "/details <task_id> [description] - Set or view task details\n"
         "/details+ <task_id>\\n[description] - Append to task details (multi-line)\n"
-        "/deadline <task_id> [YYYY-MM-DD] - Set or view task deadline (use \"clear\" to remove)\n\n"
+        "/deadline <task_id> [date] - Set or view task deadline\n"
+        "  Formats: YYYY-MM-DD, DD, MM-DD, +N, or \"clear\" to remove\n\n"
         "Shorthand Commands:\n"
         "+ <title> - Add a task (multi-line for description)\n"
         "-<task_id> - Remove a task\n"
@@ -46,7 +47,7 @@ async def show_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         chat_id = update.effective_chat.id
-        thread_id = update.message.message_thread_id
+        thread_id = get_thread_id(update)
         task_list, keyboard = task_bot.format_task_list_with_buttons(chat_id, thread_id)
         
         if keyboard:
@@ -57,7 +58,7 @@ async def show_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error sending task list with buttons: {e}")
         try:
             chat_id = update.effective_chat.id
-            thread_id = update.message.message_thread_id
+            thread_id = get_thread_id(update)
             task_list = task_bot.format_task_list_plain(chat_id, thread_id)
             await update.message.reply_text(task_list)
         except Exception as e2:
@@ -73,7 +74,7 @@ async def show_text_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         chat_id = update.effective_chat.id
-        thread_id = update.message.message_thread_id
+        thread_id = get_thread_id(update)
         task_list = task_bot.format_task_list_plain(chat_id, thread_id)
         await update.message.reply_text(task_list)
     except Exception as e:
@@ -100,7 +101,7 @@ async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         chat_id = update.effective_chat.id
-        thread_id = update.message.message_thread_id
+        thread_id = get_thread_id(update)
         
         full_text = update.message.text
         command_part = full_text.split('\n', 1)[0]
@@ -171,7 +172,7 @@ async def assign_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     chat_id = update.effective_chat.id
-    thread_id = update.message.message_thread_id
+    thread_id = get_thread_id(update)
     
     mention = context.args[1]
     if not mention.startswith('@'):
@@ -302,7 +303,7 @@ async def set_task_details(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     chat_id = update.effective_chat.id
-    thread_id = update.message.message_thread_id
+    thread_id = get_thread_id(update)
     
     if len(context.args) > 1:
         details_text = " ".join(context.args[1:])
@@ -384,7 +385,7 @@ async def set_task_deadline(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     chat_id = update.effective_chat.id
-    thread_id = update.message.message_thread_id
+    thread_id = get_thread_id(update)
     
     if len(context.args) > 1:
         date_str = " ".join(context.args[1:]).strip().lower()
@@ -492,7 +493,7 @@ async def append_task_details(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     
     chat_id = update.effective_chat.id
-    thread_id = update.message.message_thread_id
+    thread_id = get_thread_id(update)
     
     full_text = update.message.text
     command_part = full_text.split('\n', 1)[0]
@@ -581,7 +582,7 @@ async def remove_task_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     
     chat_id = update.effective_chat.id
-    thread_id = update.message.message_thread_id
+    thread_id = get_thread_id(update)
     
     try:
         success, task_title = task_bot.remove_task(chat_id, task_id, thread_id)
@@ -617,7 +618,7 @@ async def show_my_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat = update.effective_chat
     chat_id = chat.id
-    thread_id = update.message.message_thread_id
+    thread_id = get_thread_id(update)
     
     is_private = chat.type == 'private'
     
@@ -686,6 +687,9 @@ async def show_my_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 indicators = ""
                 if details:
                     indicators += " 📝"
+                if task.get('deadline'):
+                    deadline_str = task['deadline'].strftime('%Y-%m-%d') if hasattr(task['deadline'], 'strftime') else str(task['deadline'])
+                    indicators += f" 📅 {deadline_str}"
                 
                 response_lines.append(f"  • Task #{task_id}: {title}{indicators}")
             
@@ -699,6 +703,9 @@ async def show_my_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 indicators = ""
                 if details:
                     indicators += " 📝"
+                if task.get('deadline'):
+                    deadline_str = task['deadline'].strftime('%Y-%m-%d') if hasattr(task['deadline'], 'strftime') else str(task['deadline'])
+                    indicators += f" 📅 {deadline_str}"
                 
                 response_lines.append(f"  • Task #{task_id}: {title}{indicators}")
             
@@ -742,8 +749,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     message_text = update.message.text
     message_lower = message_text.lower()
-    thread_id = update.message.message_thread_id
     chat_id = update.effective_chat.id
+    thread_id = get_thread_id(update)
     
     if message_lower.startswith("+") and len(message_lower) > 1:
         if message_lower[1].isdigit():
@@ -1078,8 +1085,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 return
             
             logger.info(f"🔍 Parsed callback data - chat_id: {chat_id}, thread_id: {thread_id}, task_id: {task_id}")
-            message_thread_id = getattr(query.message, "message_thread_id", None)
-            logger.info(f"🔍 Query message chat id: {query.message.chat.id}, thread id: {message_thread_id}")
+            query_thread_id = get_thread_id_from_message(query.message)
+            logger.info(f"🔍 Query message chat id: {query.message.chat.id}, thread id: {query_thread_id}")
             
             if query.message.chat.id != chat_id:
                 logger.warning(f"❌ Chat ID mismatch - callback chat_id: {chat_id}, message chat_id: {query.message.chat.id}")
@@ -1087,9 +1094,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 return
             
             if thread_id is not None:
-                normalized_message_thread_id = message_thread_id if message_thread_id is not None else 0
-                if thread_id != normalized_message_thread_id:
-                    logger.warning(f"❌ Thread ID mismatch - callback thread_id: {thread_id}, message thread_id: {message_thread_id}")
+                if thread_id != query_thread_id:
+                    logger.warning(f"❌ Thread ID mismatch - callback thread_id: {thread_id}, query thread_id: {query_thread_id}")
                     await query.edit_message_text("❌ This button is not for this topic!")
                     return
 

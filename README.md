@@ -24,7 +24,8 @@ A secure and user-friendly Telegram bot that manages task lists. Features clicka
 - `/remove <task_id>` - Remove a task from the list
 - `/assign <task_id> [@username]` - Assign a task to a user (reply to a message or mention them)
 - `/details <task_id> [description]` - Set or view task details (view if no description provided)
-- `/deadline <task_id> [YYYY-MM-DD]` - Set or view task deadline (view if no date provided, use "clear" to remove)
+- `/deadline <task_id> [date]` - Set or view task deadline
+  - Formats: `YYYY-MM-DD` (full date), `DD` (day of current month), `MM-DD` (month-day of current year), `+N` (N days from now), or `clear` to remove
 
 **Natural language & shorthand support:**
 - `+ Task title` - Add a new task (space required after +)
@@ -253,12 +254,30 @@ This task requires completing the report by Friday and sending it to the team
 Tasks with details are marked with a 📝 indicator in the task list.
 
 ### Task Deadlines
-Set deadlines for tasks:
+Set deadlines for tasks with flexible date formats:
 
-**Set deadline:**
+**Set deadline (full date):**
 ```
 /deadline 1 2024-12-31
 ```
+
+**Set deadline (day of current month):**
+```
+/deadline 1 7
+```
+Sets deadline to the 7th of the current month (or next month if already passed).
+
+**Set deadline (month-day of current year):**
+```
+/deadline 1 7-11
+```
+Sets deadline to July 11th of the current year (or next year if already passed).
+
+**Set deadline (relative days):**
+```
+/deadline 1 +7
+```
+Sets deadline to 7 days from today.
 
 **View deadline:**
 ```
@@ -269,6 +288,7 @@ Set deadlines for tasks:
 ```
 /deadline 1 clear
 ```
+You can also use `remove` or `none` instead of `clear`.
 
 **Output:**
 ```

@@ -314,17 +314,17 @@ class TaskListBot:
             with get_db_cursor() as cursor:
                 if chat_id is not None and thread_id is not None:
                     cursor.execute(
-                        "SELECT chat_id, thread_id, id, title, details FROM tasks WHERE assignee = %s AND chat_id = %s AND thread_id = %s ORDER BY id",
+                        "SELECT chat_id, thread_id, id, title, details, deadline FROM tasks WHERE assignee = %s AND chat_id = %s AND thread_id = %s ORDER BY id",
                         (assignee, chat_id, thread_id)
                     )
                 elif chat_id is not None:
                     cursor.execute(
-                        "SELECT chat_id, thread_id, id, title, details FROM tasks WHERE assignee = %s AND chat_id = %s AND thread_id IS NULL ORDER BY id",
+                        "SELECT chat_id, thread_id, id, title, details, deadline FROM tasks WHERE assignee = %s AND chat_id = %s AND thread_id IS NULL ORDER BY id",
                         (assignee, chat_id)
                     )
                 else:
                     cursor.execute(
-                        "SELECT chat_id, thread_id, id, title, details FROM tasks WHERE assignee = %s ORDER BY chat_id, thread_id, id",
+                        "SELECT chat_id, thread_id, id, title, details, deadline FROM tasks WHERE assignee = %s ORDER BY chat_id, thread_id, id",
                         (assignee,)
                     )
                 
@@ -336,7 +336,8 @@ class TaskListBot:
                         "thread_id": row["thread_id"],
                         "id": row["id"],
                         "title": row["title"],
-                        "details": row["details"]
+                        "details": row["details"],
+                        "deadline": row["deadline"]
                     }
                     tasks.append(task)
                 
