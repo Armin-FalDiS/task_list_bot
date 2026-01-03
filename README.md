@@ -1,17 +1,16 @@
 # Telegram Task List Bot
 
-A secure and user-friendly Telegram bot that manages shared task lists for groups. Features clickable task buttons, automatic security, and persistent storage.
+A secure and user-friendly Telegram bot that manages task lists. Features clickable task buttons, automatic security, and PostgreSQL-backed persistent storage. Works in both private chats and groups.
 
 ## ✨ Features
 
 - ✅ **Add tasks** with `/add` command or natural language (`add task` or `+ task`)
 - 🖱️ **Click to remove** - Interactive buttons for easy task removal
 - 📋 **View tasks** as clickable buttons or plain text
-- 🔢 **Automatic numbering** and renumbering
-- 📊 **Task limits** - Configurable maximum tasks per chat (default: 42)
-- 💾 **Persistent storage** - Tasks survive bot restarts
+- 🔢 **Automatic ID assignment** - Each task gets a unique database ID
+- 💾 **PostgreSQL storage** - Persistent, concurrent-safe database storage
 - 🔐 **Security features** - Input validation, webhook authentication, secure logging
-- 👥 **Group-friendly** - Works in any Telegram group
+- 👥 **Works everywhere** - Works in private chats and groups
 - 🚀 **Production ready** - Webhook support with auto-generated secrets
 
 ## 🎮 Commands
@@ -43,12 +42,13 @@ nano .env
 
 ### 3. Run with Docker
 
+**Note:** Database migrations run automatically on container startup.
+
 **Development (Polling mode):**
 ```bash
 docker run -d \
   --name task-list-bot \
   --env-file .env \
-  -v task_list_data:/app/data \
   ghcr.io/armin-faldis/task_list_bot:latest
 ```
 
@@ -57,14 +57,13 @@ docker run -d \
 docker run -d \
   --name task-list-bot \
   --env-file .env \
-  -v task_list_data:/app/data \
   -p 8443:8443 \
   ghcr.io/armin-faldis/task_list_bot:latest
 ```
 
-### 4. Add the bot to your group
+### 4. Start using the bot
 - Find your bot on Telegram
-- Add it to your group
+- Start a chat with it or add it to a group
 - Start using commands like `/add Buy groceries`
 
 ## 💡 Usage Examples
@@ -106,8 +105,7 @@ Simply **click on any task button** to remove it! The bot will show:
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `TELEGRAM_BOT_TOKEN` | Your Telegram bot token | - | ✅ |
-| `TASK_FILE` | Path to task list file | `task_list.json` | ❌ |
-| `MAX_TASKS_PER_CHAT` | Maximum tasks per chat | `42` | ❌ |
+| `DATABASE_URL` | PostgreSQL connection URL | - | ✅ |
 | `WEBHOOK_URL` | Webhook URL for production | - | ❌ |
 | `WEBHOOK_PATH` | Webhook endpoint path | `/task-bot` | ❌ |
 
@@ -116,14 +114,26 @@ Simply **click on any task button** to remove it! The bot will show:
 # Telegram Bot Configuration
 TELEGRAM_BOT_TOKEN=your_bot_token_here
 
-# Task List Configuration  
-TASK_FILE=task_list.json
-MAX_TASKS_PER_CHAT=50
+# PostgreSQL Configuration
+DATABASE_URL=postgresql://task_bot_user:your_password_here@localhost:5432/task_bot
 
+# Task List Configuration
 # Webhook Configuration (optional)
 WEBHOOK_URL=https://yourdomain.com
 WEBHOOK_PATH=/task-bot
 ```
+
+### DATABASE_URL Format
+```
+postgresql://[user[:password]@][host][:port][/database]
+```
+
+Examples:
+- `postgresql://user:pass@localhost:5432/task_bot`
+- `postgresql://user:pass@db.example.com:5432/task_bot`
+- `postgresql://user@localhost/task_bot` (no password)
+
+**Note:** If your password contains special characters (like `@`, `:`, `/`, etc.), URL-encode them in the DATABASE_URL. For example, if your password is `p@ss:w0rd`, use `p%40ss%3Aw0rd`.
 
 ## 🔐 Security Features
 
@@ -144,7 +154,6 @@ WEBHOOK_PATH=/task-bot
 - ✅ **Error tracking** without information disclosure
 
 ### Resource Protection
-- ✅ **Task limits** prevent DoS attacks
 - ✅ **Non-root Docker user** for container security
 - ✅ **File permission checks** before operations
 
@@ -165,11 +174,68 @@ WEBHOOK_PATH=/task-bot
 
 ## 📁 Data Storage
 
-- **Location:** `task_list.json` (or `/app/data/task_list.json` in Docker)
-- **Format:** JSON with separate task lists per chat
+- **Database:** PostgreSQL
+- **Table:** `tasks` (created automatically via migrations)
 - **Persistence:** Data survives bot restarts
-- **Auto-creation:** File created when first needed
-- **Customizable:** Path configurable via `TASK_FILE` environment variable
+- **Concurrent access:** Safe for multiple users
+- **Efficient queries:** Indexed for fast lookups
+
+### Database Setup
+
+1. **Create database and user:**
+```bash
+createdb task_bot
+createuser task_bot_user
+psql -c "ALTER USER task_bot_user WITH PASSWORD 'your_password';"
+psql -c "GRANT ALL PRIVILEGES ON DATABASE task_bot TO task_bot_user;"
+```
+
+2. **Set DATABASE_URL in your .env file:**
+```bash
+DATABASE_URL=postgresql://task_bot_user:your_password@localhost:5432/task_bot
+```
+
+3. **Run database migrations:**
+```bash
+# This will create the schema and apply any pending migrations
+python run_migrations.py
+
+# Preview changes first (dry-run):
+python run_migrations.py --dry-run
+```
+
+**Note:** Migrations run automatically when using Docker (see Docker setup below).
+
+4. **Migrate existing JSON data (if any):**
+```bash
+python migrate_json_to_postgres.py
+# Or dry-run first:
+python migrate_json_to_postgres.py --dry-run
+```
+
+### Database Migrations
+
+The project includes a migration system for managing schema changes over time.
+
+**Running migrations:**
+```bash
+# Apply all pending migrations
+python run_migrations.py
+
+# Preview changes (dry-run)
+python run_migrations.py --dry-run
+
+# Run specific migration
+python run_migrations.py --migration 001
+```
+
+**Creating a new migration:**
+1. Create a file: `migrations/XXX_description.sql` (e.g., `002_add_priority.sql`)
+2. Write your SQL changes using `IF NOT EXISTS` / `IF EXISTS` for safety
+3. Test with `--dry-run` first
+4. Apply with `python run_migrations.py`
+
+See `migrations/README.md` for detailed migration guidelines.
 
 ## 🐳 Docker & Production
 
@@ -204,14 +270,15 @@ server {
 
 ### Bot doesn't respond
 - ✅ Check bot token is correct
-- ✅ Verify bot is added to the group
+- ✅ Verify bot is available in the chat
 - ✅ Ensure bot has permission to read messages
 - ✅ Check bot logs for errors
 
 ### Tasks not saving
-- ✅ Verify file permissions
-- ✅ Check bot has write access to data directory
-- ✅ Review bot logs for error messages
+- ✅ Verify PostgreSQL connection settings
+- ✅ Check database user has proper permissions
+- ✅ Review bot logs for database errors
+- ✅ Test database connection manually
 
 ### Webhook issues
 - ✅ Ensure webhook URL is accessible from internet
@@ -221,15 +288,12 @@ server {
 - ✅ Confirm port 8443 is mapped in Docker
 - ✅ Check webhook path matches nginx configuration
 
-### Task limit reached
-- ✅ Remove some tasks first
-- ✅ Adjust `MAX_TASKS_PER_CHAT` if needed
-- ✅ Check current limit in bot startup logs
 
 ## 📊 Dependencies
 
-- `python-telegram-bot[webhooks]==20.7` - Telegram Bot API library
+- `python-telegram-bot[webhooks]==22.3` - Telegram Bot API library
 - `python-dotenv==1.0.0` - Environment variable management
+- `psycopg2-binary==2.9.9` - PostgreSQL database adapter
 
 ## 📄 License
 

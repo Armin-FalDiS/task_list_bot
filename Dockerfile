@@ -10,22 +10,18 @@ COPY requirements.txt .
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the bot script
-COPY bot.py .
+# Copy the bot script and database files
+COPY bot.py database.py run_migrations.py start.sh ./
+COPY migrations ./migrations
 
 # Create a non-root user for security
 RUN adduser -D -s /bin/sh botuser && \
-    chown -R botuser:botuser /app
+    chown -R botuser:botuser /app && \
+    chmod +x /app/start.sh
 USER botuser
 
-# Create directory for task list file
-RUN mkdir -p /app/data
+# Expose port for webhook mode
+EXPOSE 8443
 
-# Set environment variable for task file location
-ENV TASK_FILE=/app/data/task_list.json
-
-# Expose port (not strictly necessary for Telegram bots, but good practice)
-EXPOSE 8080
-
-# Run the bot
-CMD ["python", "bot.py"]
+# Run migrations and start bot
+CMD ["./start.sh"]

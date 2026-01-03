@@ -5,47 +5,29 @@ A simple bot that manages a shared task list for groups.
 """
 
 import os
-import json
 import logging
-import stat
-import time
-import html
 import re
 import secrets
+import asyncio
 from typing import Dict, List, Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from dotenv import load_dotenv
+from database import init_connection_pool, get_db_cursor, close_connection_pool
 
-# Load environment variables from .env file
 load_dotenv()
 
-# Configure logging
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# File to store the task list (can be overridden by environment variable)
-TASK_FILE = os.getenv('TASK_FILE', 'task_list.json')
-
-# Maximum number of tasks per chat (can be overridden by environment variable)
-MAX_TASKS_PER_CHAT = int(os.getenv('MAX_TASKS_PER_CHAT', '42'))
-
 class TaskListBot:
     def __init__(self):
         logger.info("🤖 Initializing TaskListBot...")
-        logger.info(f"📁 Task file location: {TASK_FILE}")
-        logger.info(f"📊 Maximum tasks per chat: {MAX_TASKS_PER_CHAT}")
-        self.tasks = self.load_tasks()
+        init_connection_pool()
         logger.info("🚀 TaskListBot initialization complete")
-    
-    def get_storage_key(self, chat_id: int, thread_id: Optional[int]) -> str:
-        """Build the storage key for a chat/thread combination"""
-        if thread_id is None:
-            return str(chat_id)
-        return f"{chat_id}:{thread_id}"
     
     def describe_context(self, chat_id: int, thread_id: Optional[int]) -> str:
         """Return a human-readable description of the current chat/thread context"""
@@ -53,315 +35,265 @@ class TaskListBot:
             return f"chat {chat_id}"
         return f"chat {chat_id}, thread {thread_id}"
     
-    def sanitize_task_text(self, text: str) -> str:
-        """Sanitize and validate task text input"""
-        if not text or not isinstance(text, str):
-            raise ValueError("Task text must be a non-empty string")
+    def sanitize_task_title(self, title: str) -> str:
+        """Sanitize and validate task title input"""
+        if not title or not isinstance(title, str):
+            raise ValueError("Task title must be a non-empty string")
         
-        # Remove leading/trailing whitespace
-        text = text.strip()
+        title = title.strip()
         
-        # Check length limits
-        if len(text) > 1000:
-            raise ValueError("Task text too long (max 1000 characters)")
+        if len(title) > 1000:
+            raise ValueError("Task title too long (max 1000 characters)")
         
-        if len(text) < 1:
-            raise ValueError("Task text cannot be empty")
+        if len(title) < 1:
+            raise ValueError("Task title cannot be empty")
         
-        # Remove or escape potentially dangerous characters
-        # Remove control characters except newlines and tabs
-        text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
+        title = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', title)
+        title = re.sub(r'\s{3,}', ' ', title)
         
-        # Limit consecutive whitespace
-        text = re.sub(r'\s{3,}', ' ', text)
-        
-        return text
+        return title
     
     def validate_callback_data(self, data: str) -> bool:
         """Validate callback data format"""
         if not data or not isinstance(data, str):
             return False
         
-        # Expected format: "remove_{chat_id}_{task_id}" (legacy) or "remove_{chat_id}_{thread_id}_{task_id}"
-        # Chat IDs can be negative (for groups), thread/task IDs are always positive
-        pattern = r'^remove_-?\d+_(?:\d+_)?\d+$'
+        pattern = r'^(remove|view)_-?\d+_(?:\d+_)?\d+$'
         return bool(re.match(pattern, data))
     
-    def load_tasks(self) -> Dict[str, List[Dict]]:
-        """Load tasks from file, organized by chat_id"""
-        logger.info(f"🔄 Attempting to load tasks from: {TASK_FILE}")
-        
-        # Check if file exists
-        if not os.path.exists(TASK_FILE):
-            logger.info(f"📄 Task file does not exist: {TASK_FILE}")
-            logger.info("📝 Creating new empty task list")
-            return {}
-        
-        # Get file information
-        try:
-            file_stat = os.stat(TASK_FILE)
-            file_size = file_stat.st_size
-            file_mtime = time.ctime(file_stat.st_mtime)
-            file_permissions = stat.filemode(file_stat.st_mode)
-            
-            logger.info(f"📊 File info - Size: {file_size} bytes, Modified: {file_mtime}, Permissions: {file_permissions}")
-            
-            # Check if file is empty
-            if file_size == 0:
-                logger.warning(f"⚠️ Task file is empty: {TASK_FILE}")
-                return {}
-            
-        except OSError as e:
-            logger.error(f"❌ Error getting file info for {TASK_FILE}: {e}")
-            return {}
-        
-        # Try to read and parse the file
-        try:
-            with open(TASK_FILE, 'r', encoding='utf-8') as f:
-                content = f.read()
-                logger.info(f"📖 Successfully read {len(content)} characters from file")
-                
-                if not content.strip():
-                    logger.warning("⚠️ File contains only whitespace")
-                    return {}
-                
-                tasks = json.loads(content)
-                logger.info(f"✅ Successfully loaded {len(tasks)} chat(s) with tasks")
-                
-                # Log summary of loaded tasks
-                total_tasks = sum(len(chat_tasks) for chat_tasks in tasks.values())
-                logger.info(f"📋 Total tasks loaded: {total_tasks}")
-                
-                for chat_id, chat_tasks in tasks.items():
-                    logger.info(f"  💬 Chat {chat_id}: {len(chat_tasks)} tasks")
-                
-                return tasks
-                
-        except json.JSONDecodeError as e:
-            logger.error(f"❌ JSON decode error in {TASK_FILE}: {e}")
-            logger.error(f"📄 File content preview: {content[:50]}...")
-            return {}
-        except UnicodeDecodeError as e:
-            logger.error(f"❌ Unicode decode error in {TASK_FILE}: {e}")
-            return {}
-        except PermissionError as e:
-            logger.error(f"❌ Permission denied reading {TASK_FILE}: {e}")
-            return {}
-        except Exception as e:
-            logger.error(f"❌ Unexpected error loading tasks from {TASK_FILE}: {e}")
-            return {}
-    
-    def save_tasks(self):
-        """Save tasks to file"""
-        logger.info(f"💾 Attempting to save tasks to: {TASK_FILE}")
-        
-        # Calculate task summary before saving
-        total_tasks = sum(len(chat_tasks) for chat_tasks in self.tasks.values())
-        logger.info(f"📊 Saving {len(self.tasks)} chat(s) with {total_tasks} total tasks")
-        
-        for chat_id, chat_tasks in self.tasks.items():
-            logger.info(f"  💬 Chat {chat_id}: {len(chat_tasks)} tasks")
-        
-        # Check if directory exists and create if needed
-        task_dir = os.path.dirname(os.path.abspath(TASK_FILE))
-        if task_dir and not os.path.exists(task_dir):
-            try:
-                os.makedirs(task_dir, exist_ok=True)
-                logger.info(f"📁 Created directory: {task_dir}")
-            except OSError as e:
-                logger.error(f"❌ Failed to create directory {task_dir}: {e}")
-                return
-        
-        # Check write permissions
-        if os.path.exists(TASK_FILE):
-            try:
-                if not os.access(TASK_FILE, os.W_OK):
-                    logger.error(f"❌ No write permission for {TASK_FILE}")
-                    return
-            except OSError as e:
-                logger.error(f"❌ Error checking write permissions for {TASK_FILE}: {e}")
-                return
-        
-        # Get file info before writing (if file exists)
-        old_size = 0
-        old_mtime = None
-        if os.path.exists(TASK_FILE):
-            try:
-                old_stat = os.stat(TASK_FILE)
-                old_size = old_stat.st_size
-                old_mtime = time.ctime(old_stat.st_mtime)
-                logger.info(f"📊 Current file - Size: {old_size} bytes, Modified: {old_mtime}")
-            except OSError as e:
-                logger.warning(f"⚠️ Could not get file info before saving: {e}")
-        
-        # Write the file
-        try:
-            with open(TASK_FILE, 'w', encoding='utf-8') as f:
-                json.dump(self.tasks, f, ensure_ascii=False, indent=2)
-            
-            # Get new file info after writing
-            try:
-                new_stat = os.stat(TASK_FILE)
-                new_size = new_stat.st_size
-                new_mtime = time.ctime(new_stat.st_mtime)
-                new_permissions = stat.filemode(new_stat.st_mode)
-                
-                logger.info(f"✅ Successfully saved tasks to {TASK_FILE}")
-                logger.info(f"📊 New file info - Size: {new_size} bytes, Modified: {new_mtime}, Permissions: {new_permissions}")
-                
-                if old_size > 0:
-                    size_diff = new_size - old_size
-                    logger.info(f"📈 Size change: {size_diff:+d} bytes ({old_size} → {new_size})")
-                
-                # Verify persistence after saving
-                if self.verify_persistence():
-                    logger.info("✅ Persistence verification passed")
-                else:
-                    logger.error("❌ Persistence verification failed - data may not be saved correctly")
-                
-            except OSError as e:
-                logger.warning(f"⚠️ Could not get file info after saving: {e}")
-                
-        except PermissionError as e:
-            logger.error(f"❌ Permission denied writing to {TASK_FILE}: {e}")
-        except OSError as e:
-            logger.error(f"❌ OS error writing to {TASK_FILE}: {e}")
-        except UnicodeEncodeError as e:
-            logger.error(f"❌ Unicode encode error writing to {TASK_FILE}: {e}")
-        except Exception as e:
-            logger.error(f"❌ Unexpected error saving tasks to {TASK_FILE}: {e}")
-            logger.error(f"📄 Task data preview: {len(self.tasks)} chats, {sum(len(chat_tasks) for chat_tasks in self.tasks.values())} total tasks")
-    
-    def verify_persistence(self) -> bool:
-        """Verify that the task file exists and contains valid data"""
-        logger.info(f"🔍 Verifying persistence for: {TASK_FILE}")
-        
-        if not os.path.exists(TASK_FILE):
-            logger.warning(f"⚠️ Task file does not exist: {TASK_FILE}")
-            return False
-        
-        try:
-            with open(TASK_FILE, 'r', encoding='utf-8') as f:
-                content = f.read()
-                if not content.strip():
-                    logger.warning("⚠️ Task file is empty")
-                    return False
-                
-                # Try to parse the JSON
-                file_tasks = json.loads(content)
-                logger.info(f"✅ Persistence verification successful - file contains {len(file_tasks)} chat(s)")
-                
-                # Compare with in-memory data
-                if file_tasks == self.tasks:
-                    logger.info("✅ File content matches in-memory data")
-                    return True
-                else:
-                    logger.warning("⚠️ File content differs from in-memory data")
-                    return False
-                    
-        except Exception as e:
-            logger.error(f"❌ Persistence verification failed: {e}")
-            return False
     
     def get_tasks_with_context(
         self,
         chat_id: int,
         thread_id: Optional[int] = None
     ) -> tuple[List[Dict], Optional[int]]:
-        """
-        Retrieve tasks along with the storage context (thread id) they belong to.
-        General chat and threads are considered separate.
-        """
-        key = self.get_storage_key(chat_id, thread_id)
-        if key in self.tasks:
-            return self.tasks[key], thread_id
-        
-        return [], thread_id
+        """Retrieve tasks from database for a specific chat and optional thread"""
+        try:
+            with get_db_cursor() as cursor:
+                if thread_id is None:
+                    cursor.execute(
+                        "SELECT id, title, details, assignee_id FROM tasks WHERE chat_id = %s AND thread_id IS NULL ORDER BY id",
+                        (chat_id,)
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT id, title, details, assignee_id FROM tasks WHERE chat_id = %s AND thread_id = %s ORDER BY id",
+                        (chat_id, thread_id)
+                    )
+                
+                rows = cursor.fetchall()
+                tasks = []
+                for row in rows:
+                    task = {
+                        "id": row["id"],
+                        "title": row["title"],
+                        "details": row["details"],
+                        "assignee_id": row["assignee_id"]
+                    }
+                    tasks.append(task)
+                
+                return tasks, thread_id
+        except Exception as e:
+            logger.error(f"❌ Error loading tasks from database: {e}")
+            return [], thread_id
     
     def get_chat_tasks(self, chat_id: int, thread_id: Optional[int] = None) -> List[Dict]:
         """Get tasks for a specific chat and optional thread"""
         tasks, _ = self.get_tasks_with_context(chat_id, thread_id)
         return tasks
     
-    def add_task(self, chat_id: int, task_text: str, thread_id: Optional[int] = None) -> int:
-        """Add a new task to the list"""
-        # Sanitize and validate input
+    def add_task(self, chat_id: int, task_title: str, thread_id: Optional[int] = None) -> int:
+        """Add a new task to the database"""
         try:
-            sanitized_text = self.sanitize_task_text(task_text)
+            sanitized_title = self.sanitize_task_title(task_title)
         except ValueError as e:
-            logger.warning(f"❌ Invalid task text from chat {chat_id}: {str(e)}")
+            logger.warning(f"❌ Invalid task title from chat {chat_id}: {str(e)}")
             raise
         
-        # Check task limit
-        chat_tasks, storage_thread_id = self.get_tasks_with_context(chat_id, thread_id)
-        if len(chat_tasks) >= MAX_TASKS_PER_CHAT:
-            context_desc = self.describe_context(chat_id, storage_thread_id)
-            logger.warning(f"❌ Task limit reached for {context_desc}: {len(chat_tasks)}/{MAX_TASKS_PER_CHAT}")
-            raise ValueError(f"Task limit reached! Maximum {MAX_TASKS_PER_CHAT} tasks per chat. Please remove some tasks first.")
+        context_desc = self.describe_context(chat_id, thread_id)
+        logger.info(f"➕ Adding new task to {context_desc}")
         
-        context_desc = self.describe_context(chat_id, storage_thread_id)
-        logger.info(f"➕ Adding new task to {context_desc} ({len(chat_tasks) + 1}/{MAX_TASKS_PER_CHAT})")
-        
-        task_id = len(chat_tasks) + 1
-        new_task = {
-            "id": task_id,
-            "text": sanitized_text
-        }
-        chat_tasks.append(new_task)
-        key = self.get_storage_key(chat_id, storage_thread_id)
-        self.tasks[key] = chat_tasks
-        
-        logger.info(f"💾 Triggering save after adding task #{task_id} to {context_desc}")
-        self.save_tasks()
-        
-        logger.info(f"✅ Task #{task_id} successfully added and saved for {context_desc}")
-        return task_id
+        try:
+            with get_db_cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO tasks (chat_id, thread_id, title) VALUES (%s, %s, %s) RETURNING id",
+                    (chat_id, thread_id, sanitized_title)
+                )
+                task_id = cursor.fetchone()["id"]
+            
+            logger.info(f"✅ Task #{task_id} successfully added to {context_desc}")
+            return task_id
+        except Exception as e:
+            logger.error(f"❌ Error adding task to database: {e}")
+            raise
     
     def remove_task(self, chat_id: int, task_id: int, thread_id: Optional[int] = None) -> tuple[bool, str]:
-        """Remove a task by ID and return (success, task_description)"""
-        chat_tasks, storage_thread_id = self.get_tasks_with_context(chat_id, thread_id)
-        context_desc = self.describe_context(chat_id, storage_thread_id)
+        """Remove a task by ID and return (success, task_title)"""
+        context_desc = self.describe_context(chat_id, thread_id)
         logger.info(f"🗑️ Attempting to remove task #{task_id} from {context_desc}")
-        for i, task in enumerate(chat_tasks):
-            if task["id"] == task_id:
-                task_description = task["text"]
-                logger.info(f"📝 Found task #{task_id} to remove: '{task_description}'")
-                
-                del chat_tasks[i]
-                # Renumber remaining tasks
-                for j, remaining_task in enumerate(chat_tasks):
-                    remaining_task["id"] = j + 1
-                
-                key = self.get_storage_key(chat_id, storage_thread_id)
-                self.tasks[key] = chat_tasks
-                
-                logger.info(f"💾 Triggering save after removing task #{task_id} from {context_desc}")
-                self.save_tasks()
-                
-                logger.info(f"✅ Task #{task_id} successfully removed and saved for {context_desc}")
-                return True, task_description
         
-        logger.warning(f"⚠️ Task #{task_id} not found in {context_desc}")
-        return False, ""
+        try:
+            with get_db_cursor() as cursor:
+                if thread_id is None:
+                    cursor.execute(
+                        "SELECT title FROM tasks WHERE chat_id = %s AND thread_id IS NULL AND id = %s",
+                        (chat_id, task_id)
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT title FROM tasks WHERE chat_id = %s AND thread_id = %s AND id = %s",
+                        (chat_id, thread_id, task_id)
+                    )
+                
+                row = cursor.fetchone()
+                if not row:
+                    logger.warning(f"⚠️ Task #{task_id} not found in {context_desc}")
+                    return False, ""
+                
+                task_title = row["title"]
+                logger.info(f"📝 Found task #{task_id} to remove: '{task_title}'")
+                
+                if thread_id is None:
+                    cursor.execute(
+                        "DELETE FROM tasks WHERE chat_id = %s AND thread_id IS NULL AND id = %s",
+                        (chat_id, task_id)
+                    )
+                else:
+                    cursor.execute(
+                        "DELETE FROM tasks WHERE chat_id = %s AND thread_id = %s AND id = %s",
+                        (chat_id, thread_id, task_id)
+                    )
+            
+            logger.info(f"✅ Task #{task_id} successfully removed from {context_desc}")
+            return True, task_title
+        except Exception as e:
+            logger.error(f"❌ Error removing task from database: {e}")
+            return False, ""
+    
+    def get_task_details(self, chat_id: int, task_id: int, thread_id: Optional[int] = None) -> Optional[str]:
+        """Get task details/description from database"""
+        try:
+            with get_db_cursor() as cursor:
+                if thread_id is None:
+                    cursor.execute(
+                        "SELECT details FROM tasks WHERE chat_id = %s AND thread_id IS NULL AND id = %s",
+                        (chat_id, task_id)
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT details FROM tasks WHERE chat_id = %s AND thread_id = %s AND id = %s",
+                        (chat_id, thread_id, task_id)
+                    )
+                
+                row = cursor.fetchone()
+                return row["details"] if row else None
+        except Exception as e:
+            logger.error(f"❌ Error getting task details from database: {e}")
+            return None
+    
+    def set_task_details(self, chat_id: int, task_id: int, details: str, thread_id: Optional[int] = None) -> bool:
+        """Update task details/description in database"""
+        try:
+            with get_db_cursor() as cursor:
+                if thread_id is None:
+                    cursor.execute(
+                        "UPDATE tasks SET details = %s, updated_at = NOW() WHERE chat_id = %s AND thread_id IS NULL AND id = %s",
+                        (details, chat_id, task_id)
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE tasks SET details = %s, updated_at = NOW() WHERE chat_id = %s AND thread_id = %s AND id = %s",
+                        (details, chat_id, thread_id, task_id)
+                    )
+                
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"❌ Error setting task details in database: {e}")
+            return False
+    
+    def get_task_assignee(self, chat_id: int, task_id: int, thread_id: Optional[int] = None) -> Optional[int]:
+        """Get task assignee from database"""
+        try:
+            with get_db_cursor() as cursor:
+                if thread_id is None:
+                    cursor.execute(
+                        "SELECT assignee_id FROM tasks WHERE chat_id = %s AND thread_id IS NULL AND id = %s",
+                        (chat_id, task_id)
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT assignee_id FROM tasks WHERE chat_id = %s AND thread_id = %s AND id = %s",
+                        (chat_id, thread_id, task_id)
+                    )
+                
+                row = cursor.fetchone()
+                return row["assignee_id"] if row else None
+        except Exception as e:
+            logger.error(f"❌ Error getting task assignee from database: {e}")
+            return None
+    
+    def set_task_assignee(self, chat_id: int, task_id: int, assignee_id: Optional[int], thread_id: Optional[int] = None) -> bool:
+        """Update task assignee in database"""
+        try:
+            with get_db_cursor() as cursor:
+                if thread_id is None:
+                    cursor.execute(
+                        "UPDATE tasks SET assignee_id = %s, updated_at = NOW() WHERE chat_id = %s AND thread_id IS NULL AND id = %s",
+                        (assignee_id, chat_id, task_id)
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE tasks SET assignee_id = %s, updated_at = NOW() WHERE chat_id = %s AND thread_id = %s AND id = %s",
+                        (assignee_id, chat_id, thread_id, task_id)
+                    )
+                
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"❌ Error setting task assignee in database: {e}")
+            return False
+    
+    def get_user_tasks(self, assignee_id: int) -> List[Dict]:
+        """Get all tasks assigned to a specific user"""
+        try:
+            with get_db_cursor() as cursor:
+                cursor.execute(
+                    "SELECT chat_id, thread_id, id, title, details FROM tasks WHERE assignee_id = %s ORDER BY chat_id, thread_id, id",
+                    (assignee_id,)
+                )
+                
+                rows = cursor.fetchall()
+                tasks = []
+                for row in rows:
+                    task = {
+                        "chat_id": row["chat_id"],
+                        "thread_id": row["thread_id"],
+                        "id": row["id"],
+                        "title": row["title"],
+                        "details": row["details"]
+                    }
+                    tasks.append(task)
+                
+                return tasks
+        except Exception as e:
+            logger.error(f"❌ Error getting user tasks from database: {e}")
+            return []
     
     def format_task_list(self, chat_id: int, thread_id: Optional[int] = None) -> str:
         """Format the task list for display"""
         chat_tasks, _ = self.get_tasks_with_context(chat_id, thread_id)
         if not chat_tasks:
-            return f"📝 No tasks in the list yet!\n\nUse /add <task> to add a new task.\n\n📊 Task limit: {MAX_TASKS_PER_CHAT} per chat"
+            return f"📝 No tasks in the list yet!\n\nUse /add <task> to add a new task."
         
         task_lines = [f"📋 *Current Task List:*\n"]
         for task in chat_tasks:
-            # Escape Markdown special characters in task text
-            escaped_text = self.escape_markdown(task['text'])
-            task_lines.append(f"{task['id']}. {escaped_text}")
+            escaped_title = self.escape_markdown(task['title'])
+            task_lines.append(f"{task['id']}. {escaped_title}")
         
         task_lines.append(f"\n💡 Click on any task button to remove it")
         return "\n".join(task_lines)
     
     def escape_markdown(self, text: str) -> str:
         """Escape Markdown special characters"""
-        # Characters that need escaping in Markdown
         escape_chars = ['*', '_', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
         for char in escape_chars:
             text = text.replace(char, f'\\{char}')
@@ -371,11 +303,11 @@ class TaskListBot:
         """Format the task list for display without Markdown"""
         chat_tasks, _ = self.get_tasks_with_context(chat_id, thread_id)
         if not chat_tasks:
-            return f"📝 No tasks in the list yet!\n\nUse /add <task> to add a new task.\n\n📊 Task limit: {MAX_TASKS_PER_CHAT} per chat"
+            return f"📝 No tasks in the list yet!\n\nUse /add <task> to add a new task."
         
         task_lines = [f"📋 Current Task List:\n"]
         for task in chat_tasks:
-            task_lines.append(f"{task['id']}. {task['text']}")
+            task_lines.append(f"{task['id']}. {task['title']}")
         
         task_lines.append(f"\n💡 Click on any task button to remove it")
         return "\n".join(task_lines)
@@ -384,17 +316,15 @@ class TaskListBot:
         """Format the task list as buttons only - no text, just clickable task buttons"""
         chat_tasks, storage_thread_id = self.get_tasks_with_context(chat_id, thread_id)
         if not chat_tasks:
-            return f"📝 No tasks in the list yet!\n\nUse /add <task> to add a new task.\n\n📊 Task limit: {MAX_TASKS_PER_CHAT} per chat", None
+            return f"📝 No tasks in the list yet!\n\nUse /add <task> to add a new task.", None
         
         keyboard_buttons = []
         
         for task in chat_tasks:
-            # Truncate task text if too long for button
-            task_text = task['text']
-            if len(task_text) > 50:
-                task_text = task_text[:47] + "..."
+            task_title = task['title']
+            if len(task_title) > 50:
+                task_title = task_title[:47] + "..."
             
-            # Create a button for each task - the button text IS the task
             if storage_thread_id is not None:
                 callback_data = f"remove_{chat_id}_{storage_thread_id}_{task['id']}"
             else:
@@ -402,7 +332,7 @@ class TaskListBot:
             
             keyboard_buttons.append([
                 InlineKeyboardButton(
-                    f"{task['id']}. {task_text}", 
+                    f"{task['id']}. {task_title}", 
                     callback_data=callback_data
                 )
             ])
@@ -443,10 +373,8 @@ async def show_text_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Error sending plain text task list: {e2}")
             await update.message.reply_text("❌ Error displaying task list. Please try again.")
     
-    # Clean up user's command message (always attempt, regardless of success/failure above)
     await delete_user_message(update)
 
-# Global bot instance
 task_bot = TaskListBot()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -455,22 +383,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.warning("Received /start command without message")
         return
     
-    if update.effective_chat.type == "private":
-        await update.message.reply_text(
-            "🤖 **Task List Bot**\n\n"
-            "This bot helps manage a shared task list in groups!\n\n"
-            "**Commands:**\n"
-            "/list - Show current tasks (as clickable buttons)\n"
-            "/text - Show current tasks (as text list)\n"
-            "/add <task> - Add a new task\n\n"
-            "💡 **Tip:** Click on any task button to remove it!\n\n"
-            "Add me to a group to start managing tasks together!"
-        )
-    else:
-        await update.message.reply_text(
-            "🤖 Task List Bot is ready!\n\n"
-            "Use /list to see current tasks or /add <task> to add a new one."
-        )
+    await update.message.reply_text(
+        "🤖 **Task List Bot**\n\n"
+        "This bot helps manage your task list!\n\n"
+        "**Commands:**\n"
+        "/list - Show current tasks (as clickable buttons)\n"
+        "/text - Show current tasks (as text list)\n"
+        "/add <task> - Add a new task\n\n"
+        "💡 **Tip:** Click on any task button to remove it!"
+    )
 
 async def show_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /list command"""
@@ -499,7 +420,6 @@ async def show_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Error sending plain task list: {e2}")
             await update.message.reply_text("❌ Error displaying task list. Please try again.")
     
-    # Clean up user's command message (always attempt, regardless of success/failure above)
     await delete_user_message(update)
 
 async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -520,23 +440,21 @@ async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         chat_id = update.effective_chat.id
         thread_id = update.message.message_thread_id
-        task_text = " ".join(context.args)
-        task_id = task_bot.add_task(chat_id, task_text, thread_id)
+        task_title = " ".join(context.args)
+        task_id = task_bot.add_task(chat_id, task_title, thread_id)
         
-        # Show updated task list with buttons
         task_list, keyboard = task_bot.format_task_list_with_buttons(chat_id, thread_id)
         if keyboard:
             await update.message.reply_text(
-                f"✅ Added task #{task_id}: {task_bot.escape_markdown(task_text)}\n\n{task_list}",
+                f"✅ Added task #{task_id}: {task_bot.escape_markdown(task_title)}\n\n{task_list}",
                 parse_mode='Markdown',
                 reply_markup=keyboard
             )
         else:
-            # Fallback if no keyboard (shouldn't happen after adding a task)
-            escaped_text = task_bot.escape_markdown(task_text)
+            escaped_title = task_bot.escape_markdown(task_title)
             await update.message.reply_text(
-                f"✅ Added task #{task_id}: {escaped_text}\n\n"
-                f"Use /list to see all tasks or /remove {task_id} to remove this one.",
+                f"✅ Added task #{task_id}: {escaped_title}\n\n"
+                f"Use /list to see all tasks.",
                 parse_mode='Markdown'
             )
     except ValueError as e:
@@ -546,51 +464,42 @@ async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error adding task: {e}")
         await update.message.reply_text("❌ Error adding task. Please try again.")
     
-    # Clean up user's command message (always attempt, regardless of success/failure above)
     await delete_user_message(update)
 
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle regular text messages"""
-    # Check if update has a message
     if not update.message:
         logger.warning("Received update without message")
-        return
-    
-    # Only respond in groups, not private chats
-    if update.effective_chat.type == "private":
         return
     
     message_text = update.message.text.lower()
     thread_id = update.message.message_thread_id
     
-    # Simple keyword detection for adding tasks
     if message_text.startswith("add "):
-        task_text = update.message.text[4:].strip()  # Remove "add "
+        task_title = update.message.text[4:].strip()
     elif message_text.startswith("+ "):
-        task_text = update.message.text[2:].strip()  # Remove "+ "
+        task_title = update.message.text[2:].strip()
     else:
-        task_text = None
+        task_title = None
     
-    if task_text:
+    if task_title:
         try:
             chat_id = update.effective_chat.id
-            task_id = task_bot.add_task(chat_id, task_text, thread_id)
+            task_id = task_bot.add_task(chat_id, task_title, thread_id)
             
-            # Show updated task list with buttons
             task_list, keyboard = task_bot.format_task_list_with_buttons(chat_id, thread_id)
             if keyboard:
                 await update.message.reply_text(
-                    f"✅ Added task #{task_id}: {task_bot.escape_markdown(task_text)}\n\n{task_list}",
+                    f"✅ Added task #{task_id}: {task_bot.escape_markdown(task_title)}\n\n{task_list}",
                     parse_mode='Markdown',
                     reply_markup=keyboard
                 )
             else:
                 await update.message.reply_text(
-                    f"✅ Added task #{task_id}: {task_text}"
+                    f"✅ Added task #{task_id}: {task_title}"
                 )
-            # Clean up user's message
             await delete_user_message(update)
         except ValueError as e:
             logger.warning(f"Invalid task input from chat {update.effective_chat.id}: {str(e)}")
@@ -604,7 +513,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle callback queries from inline keyboard buttons"""
     query = update.callback_query
-    await query.answer()  # Acknowledge the callback query
+    await query.answer()
     
     if not query.data:
         logger.warning("❌ Received callback query without data")
@@ -613,13 +522,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     logger.info(f"🔍 Received callback query: {query.data}")
     
     try:
-        # Validate callback data format first
         if not task_bot.validate_callback_data(query.data):
             logger.warning(f"❌ Invalid callback data format: {query.data}")
             await query.edit_message_text("❌ Invalid request format. Please try again.")
             return
         
-        # Parse callback data: "remove_{chat_id}_{task_id}"
         if query.data.startswith("remove_"):
             parts = query.data.split("_")
             chat_id = None
@@ -659,20 +566,19 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     return
 
             logger.info(f"✅ Context matches, attempting to remove task #{task_id}")
-            success, task_description = task_bot.remove_task(chat_id, task_id, thread_id)
-            logger.info(f"🔍 Task removal result: success={success}, description='{task_description}'")
+            success, task_title = task_bot.remove_task(chat_id, task_id, thread_id)
+            logger.info(f"🔍 Task removal result: success={success}, title='{task_title}'")
             if success:
-                # Show updated task list with buttons
                 task_list, keyboard = task_bot.format_task_list_with_buttons(chat_id, thread_id)
                 if keyboard:
                     await query.edit_message_text(
-                        f"✅ Removed task #{task_id}: {task_bot.escape_markdown(task_description)}\n\n{task_list}",
+                        f"✅ Removed task #{task_id}: {task_bot.escape_markdown(task_title)}\n\n{task_list}",
                         parse_mode='Markdown',
                         reply_markup=keyboard
                     )
                 else:
                     await query.edit_message_text(
-                        f"✅ Removed task #{task_id}: {task_description}\n\n"
+                        f"✅ Removed task #{task_id}: {task_title}\n\n"
                         "📝 No tasks remaining in the list."
                     )
             else:
@@ -692,33 +598,26 @@ def generate_webhook_secret() -> str:
 
 async def main():
     """Main function to run the bot"""
-    # Get bot token from environment variable
     bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
     if not bot_token:
         logger.error("TELEGRAM_BOT_TOKEN environment variable not set!")
         return
     
-    # Create application
     application = Application.builder().token(bot_token).build()
     
-    # Add command handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("list", show_list))
     application.add_handler(CommandHandler("text", show_text_list))
     application.add_handler(CommandHandler("add", add_task))
     
-    # Add message handler for text messages
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     
-    # Add callback query handler for inline keyboard buttons
     application.add_handler(CallbackQueryHandler(handle_callback_query))
     
-    # Check for webhook configuration
     webhook_url = os.getenv('WEBHOOK_URL')
     webhook_path = os.getenv('WEBHOOK_PATH', '/task-bot')
     
     if webhook_url:
-        # Use webhook mode
         try:
             logger.info(f"🌐 Starting bot with webhook mode...")
             logger.info(f"📡 Webhook URL: {webhook_url}")
@@ -729,11 +628,9 @@ async def main():
             webhook_secret = generate_webhook_secret()
             logger.info("🔐 Generated new webhook secret token for this session")
             
-            # Combine webhook URL with path
             full_webhook_url = f"{webhook_url.rstrip('/')}{webhook_path}"
             logger.info(f"🔗 Full webhook URL: {full_webhook_url}")
             
-            # Initialize and start webhook
             await application.initialize()
             await application.start()
             await application.updater.start_webhook(
@@ -745,7 +642,6 @@ async def main():
             )
             logger.info("🌐 Webhook started successfully")
             
-            # Keep the bot running
             try:
                 await asyncio.Event().wait()
             except KeyboardInterrupt:
@@ -754,6 +650,7 @@ async def main():
                 await application.updater.stop()
                 await application.stop()
                 await application.shutdown()
+                close_connection_pool()
                 
         except Exception as e:
             logger.error(f"❌ Error starting webhook mode: {e}")
@@ -763,17 +660,16 @@ async def main():
             await application.updater.start_polling()
             logger.info("🔄 Polling started successfully")
             
-            # Keep the bot running
             try:
                 await asyncio.Event().wait()
             except KeyboardInterrupt:
                 logger.info("🛑 Shutting down bot...")
-            finally:
-                await application.updater.stop()
-                await application.stop()
-                await application.shutdown()
+        finally:
+            await application.updater.stop()
+            await application.stop()
+            await application.shutdown()
+            close_connection_pool()
     else:
-        # Use polling mode (fallback)
         logger.info("🔄 Starting bot with polling mode...")
         logger.info("ℹ️ WEBHOOK_URL not set - using polling")
         await application.initialize()
@@ -781,7 +677,6 @@ async def main():
         await application.updater.start_polling()
         logger.info("🔄 Polling started successfully")
         
-        # Keep the bot running
         try:
             await asyncio.Event().wait()
         except KeyboardInterrupt:
@@ -790,7 +685,7 @@ async def main():
             await application.updater.stop()
             await application.stop()
             await application.shutdown()
+            close_connection_pool()
 
 if __name__ == '__main__':
-    import asyncio
     asyncio.run(main())
