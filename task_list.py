@@ -374,14 +374,18 @@ class TaskListBot:
         for task in chat_tasks:
             indicators = ""
             if task.get('assignee'):
-                indicators += " 👤"
-            if task.get('details'):
-                indicators += " 📝"
+                indicators += f" 👤 @{task['assignee']}"
             if task.get('deadline'):
-                indicators += " 📅"
+                deadline_str = task['deadline'].strftime('%Y-%m-%d') if hasattr(task['deadline'], 'strftime') else str(task['deadline'])
+                indicators += f" 📅 {deadline_str}"
+            
             task_lines.append(f"{task['id']}. {task['title']}{indicators}")
+            
+            if task.get('details'):
+                details_lines = task['details'].split('\n')
+                for detail_line in details_lines:
+                    task_lines.append(f"   {detail_line}")
         
-        task_lines.append(f"\n💡 Click on any task button to remove it")
         return "\n".join(task_lines)
     
     def format_task_list_with_buttons(self, chat_id: int, thread_id: Optional[int] = None) -> tuple[str, Optional[InlineKeyboardMarkup]]:
