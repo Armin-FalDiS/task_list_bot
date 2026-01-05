@@ -47,12 +47,12 @@ class TaskListBot:
             with get_db_cursor() as cursor:
                 if thread_id is None:
                     cursor.execute(
-                        "SELECT id, title, details, assignee, deadline FROM tasks WHERE chat_id = %s AND thread_id IS NULL AND id = %s",
+                        "SELECT id, title, details, assignee, creator, deadline FROM tasks WHERE chat_id = %s AND thread_id IS NULL AND id = %s",
                         (chat_id, task_id)
                     )
                 else:
                     cursor.execute(
-                        "SELECT id, title, details, assignee, deadline FROM tasks WHERE chat_id = %s AND thread_id = %s AND id = %s",
+                        "SELECT id, title, details, assignee, creator, deadline FROM tasks WHERE chat_id = %s AND thread_id = %s AND id = %s",
                         (chat_id, thread_id, task_id)
                     )
                 
@@ -65,6 +65,7 @@ class TaskListBot:
                     "title": row["title"],
                     "details": row["details"],
                     "assignee": row["assignee"],
+                    "creator": row["creator"],
                     "deadline": row["deadline"]
                 }
         except Exception as e:
@@ -80,12 +81,12 @@ class TaskListBot:
             with get_db_cursor() as cursor:
                 if thread_id is None:
                     cursor.execute(
-                        "SELECT id, title, details, assignee, deadline FROM tasks WHERE chat_id = %s AND thread_id IS NULL ORDER BY id",
+                        "SELECT id, title, details, assignee, creator, deadline FROM tasks WHERE chat_id = %s AND thread_id IS NULL ORDER BY id",
                         (chat_id,)
                     )
                 else:
                     cursor.execute(
-                        "SELECT id, title, details, assignee, deadline FROM tasks WHERE chat_id = %s AND thread_id = %s ORDER BY id",
+                        "SELECT id, title, details, assignee, creator, deadline FROM tasks WHERE chat_id = %s AND thread_id = %s ORDER BY id",
                         (chat_id, thread_id)
                     )
                 
@@ -97,6 +98,7 @@ class TaskListBot:
                         "title": row["title"],
                         "details": row["details"],
                         "assignee": row["assignee"],
+                        "creator": row["creator"],
                         "deadline": row["deadline"]
                     }
                     tasks.append(task)
@@ -110,7 +112,7 @@ class TaskListBot:
         tasks, _ = self.get_tasks_with_context(chat_id, thread_id)
         return tasks
     
-    def add_task(self, chat_id: int, task_title: str, thread_id: Optional[int] = None) -> int:
+    def add_task(self, chat_id: int, task_title: str, thread_id: Optional[int] = None, creator: Optional[str] = None) -> int:
         try:
             sanitized_title = self.sanitize_task_title(task_title)
         except ValueError as e:
@@ -123,8 +125,8 @@ class TaskListBot:
         try:
             with get_db_cursor() as cursor:
                 cursor.execute(
-                    "INSERT INTO tasks (chat_id, thread_id, title) VALUES (%s, %s, %s) RETURNING id",
-                    (chat_id, thread_id, sanitized_title)
+                    "INSERT INTO tasks (chat_id, thread_id, title, creator) VALUES (%s, %s, %s, %s) RETURNING id",
+                    (chat_id, thread_id, sanitized_title, creator)
                 )
                 task_id = cursor.fetchone()["id"]
             
@@ -347,17 +349,17 @@ class TaskListBot:
             with get_db_cursor() as cursor:
                 if chat_id is not None and thread_id is not None:
                     cursor.execute(
-                        "SELECT chat_id, thread_id, id, title, details, deadline FROM tasks WHERE assignee = %s AND chat_id = %s AND thread_id = %s ORDER BY id",
+                        "SELECT chat_id, thread_id, id, title, details, creator, deadline FROM tasks WHERE assignee = %s AND chat_id = %s AND thread_id = %s ORDER BY id",
                         (assignee, chat_id, thread_id)
                     )
                 elif chat_id is not None:
                     cursor.execute(
-                        "SELECT chat_id, thread_id, id, title, details, deadline FROM tasks WHERE assignee = %s AND chat_id = %s AND thread_id IS NULL ORDER BY id",
+                        "SELECT chat_id, thread_id, id, title, details, creator, deadline FROM tasks WHERE assignee = %s AND chat_id = %s AND thread_id IS NULL ORDER BY id",
                         (assignee, chat_id)
                     )
                 else:
                     cursor.execute(
-                        "SELECT chat_id, thread_id, id, title, details, deadline FROM tasks WHERE assignee = %s ORDER BY chat_id, thread_id, id",
+                        "SELECT chat_id, thread_id, id, title, details, creator, deadline FROM tasks WHERE assignee = %s ORDER BY chat_id, thread_id, id",
                         (assignee,)
                     )
                 
@@ -370,6 +372,7 @@ class TaskListBot:
                         "id": row["id"],
                         "title": row["title"],
                         "details": row["details"],
+                        "creator": row["creator"],
                         "deadline": row["deadline"]
                     }
                     tasks.append(task)

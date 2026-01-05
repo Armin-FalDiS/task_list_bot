@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     title TEXT NOT NULL,
     details TEXT,
     assignee TEXT,
+    creator TEXT,
     deadline DATE,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
@@ -15,4 +16,5 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 CREATE INDEX IF NOT EXISTS idx_tasks_chat_thread ON tasks(chat_id, thread_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee) WHERE assignee IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_tasks_creator ON tasks(creator) WHERE creator IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_tasks_deadline ON tasks(deadline) WHERE deadline IS NOT NULL;

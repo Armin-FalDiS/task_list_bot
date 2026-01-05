@@ -68,8 +68,12 @@ async def do_add_task(update: Update, task_title: str, description: str = None, 
         await delete_user_message(update)
         return False
     
+    creator = None
+    if update.effective_user and update.effective_user.username:
+        creator = update.effective_user.username
+    
     try:
-        task_id = task_bot.add_task(chat_id, task_title, thread_id)
+        task_id = task_bot.add_task(chat_id, task_title, thread_id, creator)
         
         if description:
             if len(description) > 5000:
@@ -215,6 +219,10 @@ async def do_view_task_details(update: Update, task_id: int):
         response_lines.append(f"📝 Details:\n{task_info['details']}")
     else:
         response_lines.append("📝 Details: No details set")
+    
+    if task_info.get('creator'):
+        creator_display = f"@{task_info['creator']}"
+        response_lines.append(f"\n👤 Created by: {creator_display}")
     
     if task_info.get('assignee'):
         assignee_display = f"@{task_info['assignee']}"
