@@ -134,6 +134,39 @@ class TaskListBot:
             logger.error(f"❌ Error adding task to database: {e}")
             raise
     
+    def update_task_title(self, chat_id: int, task_id: int, new_title: str, thread_id: Optional[int] = None) -> bool:
+        context_desc = self.describe_context(chat_id, thread_id)
+        logger.info(f"✏️ Attempting to update title for task #{task_id} in {context_desc}")
+        
+        try:
+            sanitized_title = self.sanitize_task_title(new_title)
+        except ValueError as e:
+            logger.warning(f"❌ Invalid task title from chat {chat_id}: {str(e)}")
+            raise
+        
+        try:
+            with get_db_cursor() as cursor:
+                if thread_id is None:
+                    cursor.execute(
+                        "UPDATE tasks SET title = %s, updated_at = NOW() WHERE chat_id = %s AND thread_id IS NULL AND id = %s",
+                        (sanitized_title, chat_id, task_id)
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE tasks SET title = %s, updated_at = NOW() WHERE chat_id = %s AND thread_id = %s AND id = %s",
+                        (sanitized_title, chat_id, thread_id, task_id)
+                    )
+                
+                if cursor.rowcount > 0:
+                    logger.info(f"✅ Successfully updated title for task #{task_id} in {context_desc}")
+                    return True
+                else:
+                    logger.warning(f"⚠️ Task #{task_id} not found in {context_desc}")
+                    return False
+        except Exception as e:
+            logger.error(f"❌ Error updating task title in database: {e}")
+            return False
+    
     def remove_task(self, chat_id: int, task_id: int, thread_id: Optional[int] = None) -> tuple[bool, str]:
         context_desc = self.describe_context(chat_id, thread_id)
         logger.info(f"🗑️ Attempting to remove task #{task_id} from {context_desc}")

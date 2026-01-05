@@ -29,12 +29,16 @@ A secure and user-friendly Telegram bot that manages task lists. Features clicka
 
 **Natural language & shorthand support:**
 - `+ Task title` - Add a new task (space required after +)
+- `+ Task title @username` - Add a new task and assign it
 - `+ Task title\nDescription` - Add a new task with description in one go
+- `+ Task title @username\nDescription` - Add a new task with description and assign it
+- `+1 New Title` - Update title of task #1
+- `+1 New Title @username` - Update title of task #1 and assign it
 - `-1` - Remove task #1
 - `@1 @username` - Assign task #1 to a user
 - `?1` - View details of task #1
-- `+1\nDescription here` - Set details for task #1 (multi-line, no space)
-- `+1+\nAppend text` - Append to task #1 details (multi-line, no space)
+- `?1\nDescription here` - Set details for task #1 (multi-line)
+- `?1+\nAppend text` - Append to task #1 details (multi-line)
 
 ## 🚀 Quick Start
 
